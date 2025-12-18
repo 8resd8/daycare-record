@@ -13,7 +13,7 @@ class AIEvaluator:
         if not self.client: return None
 
         prompt = f"""
-        당신은 요양보호 기록(주간보호센터) 특이사항 문장 품질을 개선하는 전문가입니다.
+        당신은 주간보호센터 특이사항 문장 품질을 평가/개선하는 전문가입니다.
 
         [입력]
         - 날짜: {record['date']}
@@ -23,22 +23,23 @@ class AIEvaluator:
         - 기능 특이사항: {record['functional_note']}
 
         [평가 기준]
+        - 각 활동(신체/인지/간호/기능)별 특이사항이 "잘 완성"되었는지 평가.
         - PDF 파싱데이터 특성상 띄어쓰기/개행이 불안정할 수 있음.
-        - 다음 중 하나면 '개선필요'로 판단:
-          1) 내용이 너무 짧거나 모호함(예: "특이사항 없음" 수준)
-          2) 관찰/행동/상태가 구체적으로 드러나지 않음
-          3) 문장이 어색하거나 파싱 오류로 읽기 어려움
-        - 개선이 필요하지 않으면 해당 영역은 null 로 출력.
-        - 개선이 필요하면 아래 필드를 모두 채움.
-        - **중요**: `suggested_sentence`에는 설명/사족 없이 "수정된 문장"만 출력.
+        - 등급은 아래 3개 중 하나로만 출력:
+          - 우수: 관찰/행동/상태가 구체적이고 자연스러움
+          - 평균: 의미는 통하지만 구체성이 부족하거나 문장이 다소 어색함(큰 수정은 불필요)
+          - 개선: 문장이 너무 짧거나 모호/어색/파싱오류로 품질이 낮아 수정이 필요
+        - **중요**: 등급이 "개선"일 때만 `revised_sentence`에 수정 특이사항 문장을 출력하고,
+          "우수"/"평균"이면 `revised_sentence`는 빈 문자열로 출력.
+        - `revised_sentence`에는 설명/사족 없이 "수정된 문장"만 출력.
 
         [JSON 출력 형식]
         {{
           "date": "YYYY-MM-DD",
-          "physical": {{"suggested_sentence": "", "reason": "", "original_sentence": ""}} | null,
-          "cognitive": {{"suggested_sentence": "", "reason": "", "original_sentence": ""}} | null,
-          "nursing": {{"suggested_sentence": "", "reason": "", "original_sentence": ""}} | null,
-          "recovery": {{"suggested_sentence": "", "reason": "", "original_sentence": ""}} | null
+          "physical": {{"grade": "우수|평균|개선", "revised_sentence": "", "reason": "", "original_sentence": ""}},
+          "cognitive": {{"grade": "우수|평균|개선", "revised_sentence": "", "reason": "", "original_sentence": ""}},
+          "nursing": {{"grade": "우수|평균|개선", "revised_sentence": "", "reason": "", "original_sentence": ""}},
+          "recovery": {{"grade": "우수|평균|개선", "revised_sentence": "", "reason": "", "original_sentence": ""}}
         }}
         """
 
