@@ -333,9 +333,25 @@ with main_tab2:
             eval_tabs = st.tabs(["신체활동", "인지관리", "간호관리", "기능회복"])
 
             def show_eval_df(category_key, note_key, writer_key):
+                def _pick_item(res, key):
+                    if not res:
+                        return {}
+                    if key in res and isinstance(res.get(key), dict):
+                        return res.get(key) or {}
+                    alt_keys = {
+                        "cognitive": ["cognition", "cognitve", "인지", "인지관리"],
+                        "physical": ["phys", "신체", "신체활동"],
+                        "nursing": ["nurse", "간호", "간호관리"],
+                        "recovery": ["rehab", "functional", "기능", "기능회복"],
+                    }
+                    for k in alt_keys.get(key, []):
+                        if k in res and isinstance(res.get(k), dict):
+                            return res.get(k) or {}
+                    return {}
+
                 rows = []
                 for date, res in active_doc["eval_results"].items():
-                    item = (res or {}).get(category_key, {})
+                    item = _pick_item(res or {}, category_key)
                     original_record = next((r for r in active_doc["parsed_data"] if r["date"] == date), {})
 
                     grade = item.get("grade", "-")
@@ -346,12 +362,16 @@ with main_tab2:
                     if grade != "개선":
                         reason = ""
 
+                    original_text = original_record.get(note_key, "")
+                    if not original_text:
+                        original_text = item.get("original_sentence", "")
+
                     rows.append({
                         "날짜": date,
                         "등급": grade,
                         "수정 제안": item.get("revised_sentence", ""),
+                        "원본 내용": original_text,
                         "이유": reason,
-                        "원본 내용": original_record.get(note_key, ""),
                         "작성자": original_record.get(writer_key, "")
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
