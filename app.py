@@ -263,10 +263,10 @@ with main_tab1:
             df_func = pd.DataFrame([{
                 "날짜": r.get('date'),
                 "특이사항": r.get('functional_note'),
-                "신체ㆍ인지기능향상프로그램": r.get('prog_basic'),
-                "신체ㆍ인지기능 향상프로그램(항목내용)": r.get('prog_enhance_detail'),
-                "인지활동형프로그램": r.get('prog_activity'),
-                "인지기능향상훈련": r.get('prog_cognitive'),
+                "향상 프로그램 내용": r.get('prog_enhance_detail'),
+                "향상 프로그램 여부": r.get('prog_basic'),
+                "인지활동 프로그램": r.get('prog_activity'),
+                "인지기능 훈련": r.get('prog_cognitive'),
                 "물리치료": r.get('prog_therapy'),
                 "작성자": r.get('writer_func')
             } for r in data])
