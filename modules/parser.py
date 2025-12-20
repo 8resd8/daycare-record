@@ -72,6 +72,7 @@ class CareRecordParser:
                 # 4. 기능회복
                 "prog_basic": "미실시", "prog_activity": "미실시",
                 "prog_cognitive": "미실시", "prog_therapy": "미실시",
+                "prog_enhance_detail": "",
                 "functional_note": "",
                 "writer_func": None
             }
@@ -118,6 +119,7 @@ class CareRecordParser:
             if idx["prog_act"] != -1: record["prog_activity"] = self._check_status(self._get_cell(table, idx["prog_act"], col_idx))
             if idx["prog_cog"] != -1: record["prog_cognitive"] = self._check_status(self._get_cell(table, idx["prog_cog"], col_idx))
             if idx["prog_ther"] != -1: record["prog_therapy"] = self._check_status(self._get_cell(table, idx["prog_ther"], col_idx))
+            if idx["prog_detail"] != -1: record["prog_enhance_detail"] = self._get_cell(table, idx["prog_detail"], col_idx)
 
             # 특이사항
             if idx["note_phy"] != -1: record["physical_note"] = self._get_cell(table, idx["note_phy"], col_idx)
@@ -187,11 +189,12 @@ class CareRecordParser:
             "note_phy": -1, "writer_phy": -1,
             "cog_sup": -1, "comm_sup": -1, "note_cog": -1, "writer_cog": -1,
             "bp_temp": -1, "health": -1, "nursing": -1, "emergency": -1, "note_nur": -1, "writer_nur": -1,
-            "prog_basic": -1, "prog_act": -1, "prog_cog": -1, "prog_ther": -1, "note_func": -1, "writer_func": -1
+            "prog_basic": -1, "prog_act": -1, "prog_cog": -1, "prog_ther": -1, "prog_detail": -1, "note_func": -1, "writer_func": -1
         }
         note_rows, writer_rows = [], []
         for i, row in enumerate(table):
             label = "".join([str(c).replace("\n", "").replace(" ", "") for c in row[:3] if c])
+            normalized_label = label.replace("ㆍ", "").replace("·", "")
 
             if "년월/일" in label: idx["date"] = i
             elif "시작시간" in label: idx["time"] = i
@@ -221,6 +224,8 @@ class CareRecordParser:
             elif "인지활동" in label: idx["prog_act"] = i
             elif "인지기능" in label and "향상" in label: idx["prog_cog"] = i
             elif "물리" in label: idx["prog_ther"] = i
+            elif "신체인지기능향상프로그램" in normalized_label and ("항목" in normalized_label or "내용" in normalized_label):
+                idx["prog_detail"] = i
 
             elif "특이사항" in label: note_rows.append(i)
             elif "작성자" in label: writer_rows.append(i)

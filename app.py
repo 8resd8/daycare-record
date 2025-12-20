@@ -9,6 +9,14 @@ from modules.ai_evaluator import AIEvaluator
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="요양기록 AI 매니저", layout="wide", page_icon="🏥")
+st.markdown(
+    """
+    <style>
+      [data-testid="stSidebarNav"] { display: none; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("주간보호센터 기록 관리 시스템")
 
 # --- 세션 상태 초기화 ---
@@ -61,6 +69,16 @@ def delete_document(doc_id):
 
 # --- 사이드바: 파일 업로드 및 선택 ---
 with st.sidebar:
+    nav = st.radio(
+        "메뉴",
+        options=["파일 처리", "수급자 관리"],
+        index=0,
+        horizontal=True,
+        key="sidebar_nav_app",
+    )
+    if nav == "수급자 관리":
+        st.switch_page("pages/customer_manage.py")
+
     st.header("📂 파일 처리")
 
     # 1. 파일 업로드 섹션
@@ -213,6 +231,7 @@ with main_tab1:
                 "세면/구강": r.get('hygiene_care'),
                 "목욕": r.get('bath_time') if r.get('bath_time') == "없음" else f"{r.get('bath_time')} / {r.get('bath_method')}",
                 "식사": f"{r.get('meal_breakfast')}/{r.get('meal_lunch')}/{r.get('meal_dinner')}",
+                "화장실이용하기(기저기교환)": r.get('toilet_care'),
                 "이동": r.get('mobility_care'),
                 "작성자": r.get('writer_phy')
             } for r in data])
@@ -233,6 +252,7 @@ with main_tab1:
                 "날짜": r.get('date'),
                 "특이사항": r.get('nursing_note'),
                 "혈압/체온": r.get('bp_temp'),
+                "건강관리(5분)": r.get('health_manage'),
                 "간호관리": r.get('nursing_manage'),
                 "응급서비스": r.get('emergency'),
                 "작성자": r.get('writer_nur')
@@ -243,8 +263,11 @@ with main_tab1:
             df_func = pd.DataFrame([{
                 "날짜": r.get('date'),
                 "특이사항": r.get('functional_note'),
-                "기본동작": r.get('prog_basic'),
-                "치료내용": r.get('prog_therapy'),
+                "신체ㆍ인지기능향상프로그램": r.get('prog_basic'),
+                "신체ㆍ인지기능 향상프로그램(항목내용)": r.get('prog_enhance_detail'),
+                "인지활동형프로그램": r.get('prog_activity'),
+                "인지기능향상훈련": r.get('prog_cognitive'),
+                "물리치료": r.get('prog_therapy'),
                 "작성자": r.get('writer_func')
             } for r in data])
             st.dataframe(df_func, use_container_width=True, hide_index=True)
