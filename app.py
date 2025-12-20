@@ -374,7 +374,23 @@ with main_tab2:
                         "이유": reason,
                         "작성자": original_record.get(writer_key, "")
                     })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                df = pd.DataFrame(rows)
+                if df.empty:
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                else:
+                    def _row_style(row):
+                        if row["등급"] == "개선":
+                            return ["color: green; font-weight: 600;"] * len(row)
+                        return ["" for _ in row]
+
+                    def _grade_style(val):
+                        if val == "개선":
+                            return "color: green; font-weight: 600;"
+                        if val == "우수":
+                            return "color: blue; font-weight: 600;"
+                        return ""
+                    styled = df.style.apply(_row_style, axis=1).map(_grade_style, subset=["등급"])
+                    st.dataframe(styled, use_container_width=True, hide_index=True)
 
             with eval_tabs[0]: show_eval_df("physical", "physical_note", "writer_phy")
             with eval_tabs[1]: show_eval_df("cognitive", "cognitive_note", "writer_cog")
