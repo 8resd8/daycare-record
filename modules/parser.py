@@ -1,11 +1,67 @@
 import pdfplumber
 import re
+import os
 
 class CareRecordParser:
     def __init__(self, pdf_file):
         self.pdf_file = pdf_file
         self.parsed_data = []
         self.appendix_notes = {}
+        self._debug = os.getenv("PARSER_DEBUG") == "1"
+
+    def _normalize_text(self, text):
+        s = str(text).replace("\n", "").replace(" ", "")
+        return s.replace("ㆍ", "").replace("·", "")
+
+    def _normalize_row_text(self, row):
+        return "".join([self._normalize_text(c) for c in row if c])
+
+    def _pick_nearby_text(self, table, row, col, *, window=3, min_len=2):
+        try:
+            row_data = table[row]
+        except Exception:
+            return ""
+
+        def _is_labelish(v: str) -> bool:
+            vv = self._normalize_text(v)
+            return any(k in vv for k in [
+                "신체인지기능향상프로그램",
+                "향상프로그램",
+                "프로그램",
+                "향상",
+                "항목",
+                "내용",
+            ])
+
+        best = ""
+        # 1) 같은 행 전체에서 가장 긴 텍스트를 우선 채택 (라벨성 텍스트 제외)
+        for j in range(len(row_data)):
+            v = self._get_cell(table, row, j)
+            if not v:
+                continue
+            if len(v.strip()) < min_len:
+                continue
+            if _is_labelish(v):
+                continue
+            if len(v) > len(best):
+                best = v
+
+        # 2) 그래도 못 찾으면 주변 window 내에서라도 텍스트를 찾음
+        if not best:
+            start = max(0, col - window)
+            end = min(len(row_data) - 1, col + window)
+            for j in range(start, end + 1):
+                v = self._get_cell(table, row, j)
+                if not v:
+                    continue
+                if len(v.strip()) < min_len:
+                    continue
+                if _is_labelish(v):
+                    continue
+                if len(v) > len(best):
+                    best = v
+
+        return best
 
     def parse(self):
         with pdfplumber.open(self.pdf_file) as pdf:
@@ -25,6 +81,12 @@ class CareRecordParser:
 
         if not table: return
 
+        if self._debug:
+            try:
+                print(f"[PARSER_DEBUG] table extracted: rows={len(table)} cols~={max(len(r) for r in table) if table else 0}")
+            except Exception:
+                print("[PARSER_DEBUG] table extracted")
+
         # [디버그 수정] 별지 테이블 감지 로직 강화
         # 헤더를 확인하는 대신, 데이터 패턴(날짜+긴글)을 확인하여 별지로 등록
         if self._is_appendix_table(table):
@@ -34,6 +96,16 @@ class CareRecordParser:
         # 메인 기록지 파싱
         idx = self._find_row_indices(table)
         if idx["date"] == -1: return
+
+        if self._debug:
+            print(f"[PARSER_DEBUG] row indices: {idx}")
+            if idx.get("prog_detail", -1) != -1:
+                try:
+                    r = table[idx["prog_detail"]]
+                    sample = [self._get_cell(table, idx["prog_detail"], j) for j in range(min(len(r), 12))]
+                    print(f"[PARSER_DEBUG] prog_detail row(first 12 cells): {sample}")
+                except Exception as e:
+                    print(f"[PARSER_DEBUG] prog_detail row read failed: {e}")
 
         date_row = table[idx["date"]]
 
@@ -119,7 +191,12 @@ class CareRecordParser:
             if idx["prog_act"] != -1: record["prog_activity"] = self._check_status(self._get_cell(table, idx["prog_act"], col_idx))
             if idx["prog_cog"] != -1: record["prog_cognitive"] = self._check_status(self._get_cell(table, idx["prog_cog"], col_idx))
             if idx["prog_ther"] != -1: record["prog_therapy"] = self._check_status(self._get_cell(table, idx["prog_ther"], col_idx))
-            if idx["prog_detail"] != -1: record["prog_enhance_detail"] = self._get_cell(table, idx["prog_detail"], col_idx)
+            if idx["prog_detail"] != -1:
+                record["prog_enhance_detail"] = self._pick_nearby_text(table, idx["prog_detail"], col_idx, window=8)
+                if self._debug and record["prog_enhance_detail"]:
+                    print(f"[PARSER_DEBUG] {record['date']} prog_enhance_detail(len={len(record['prog_enhance_detail'])}): {record['prog_enhance_detail'][:80]}")
+                elif self._debug:
+                    print(f"[PARSER_DEBUG] {record['date']} prog_enhance_detail is empty")
 
             # 특이사항
             if idx["note_phy"] != -1: record["physical_note"] = self._get_cell(table, idx["note_phy"], col_idx)
@@ -195,6 +272,7 @@ class CareRecordParser:
         for i, row in enumerate(table):
             label = "".join([str(c).replace("\n", "").replace(" ", "") for c in row[:3] if c])
             normalized_label = label.replace("ㆍ", "").replace("·", "")
+            normalized_row = self._normalize_row_text(row)
 
             if "년월/일" in label: idx["date"] = i
             elif "시작시간" in label: idx["time"] = i
@@ -222,11 +300,21 @@ class CareRecordParser:
             # 기능
             elif "기본동작" in label: idx["prog_basic"] = i
             elif "인지활동" in label: idx["prog_act"] = i
-            elif "인지기능" in label and "향상" in label: idx["prog_cog"] = i
+            elif ("신체" in label and "인지기능" in label and "향상" in label and "프로그램" in label) or ("신체인지기능향상프로그램" in normalized_row):
+                idx["prog_detail"] = i
+            elif ("인지기능" in label and "향상" in label and "훈련" in label) or ("인지기능향상훈련" in normalized_row):
+                idx["prog_cog"] = i
             elif "물리" in label: idx["prog_ther"] = i
             elif "신체인지기능향상프로그램" in normalized_label and ("항목" in normalized_label or "내용" in normalized_label):
                 idx["prog_detail"] = i
-
+            elif "신체인지기능향상프로그램" in normalized_row and ("항목" in normalized_row or "내용" in normalized_row):
+                idx["prog_detail"] = i
+            elif "신체인지기능향상프로그램" in normalized_label:
+                idx["prog_detail"] = i
+            elif "신체인지기능향상프로그램" in normalized_row:
+                idx["prog_detail"] = i
+            elif "향상프로그램" in normalized_row and ("항목" in normalized_row or "내용" in normalized_row):
+                idx["prog_detail"] = i
             elif "특이사항" in label: note_rows.append(i)
             elif "작성자" in label: writer_rows.append(i)
 
