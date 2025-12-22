@@ -5,7 +5,6 @@ import json
 class AIEvaluator:
     def __init__(self):
         try:
-            # streamlit secrets에서 API 키를 가져옵니다.
             self.client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
         except Exception as e:
             st.error(f"OpenAI 클라이언트 초기화 오류: {e}")
@@ -15,7 +14,6 @@ class AIEvaluator:
         if not self.client:
             return None
 
-        # 프롬프트 디자인: 영역별로 다른 평가 기준을 명확히 제시
         prompt = f"""
         당신은 주간보호센터 요양 기록을 감수하고 품질을 높이는 AI 전문가입니다.
         아래 입력된 기록을 분석하여 영역별로 평가하고, 필요하다면 더 나은 문장으로 수정해 주세요.
@@ -39,7 +37,7 @@ class AIEvaluator:
            - 개선: 내용이 없거나, 너무 짧거나, 문맥이 이상하여 전면 수정이 필요함.
            - 수정 목표: '상황-관찰-조치' 구조를 갖추도록 내용을 보강하여 작성.
 
-        2. **간호관리(nursing) / 기능회복(recovery)** 영역
+        2. 간호관리 / 기능회복 영역
            - 우수: 어르신의 관찰 내용, 행동, 건강 상태가 구체적이고 문장의 흐름이 자연스러움.
            - 평균: 의미는 통하지만 구체성(수치, 정확한 상태 등)이 부족하거나 문장이 다소 어색함.
            - 개선: 정보가 너무 모호하거나, 오타/파싱 오류로 인해 이해가 어려워 수정이 필요함.
@@ -58,7 +56,7 @@ class AIEvaluator:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",  # JSON 처리에 강한 최신 모델 권장 (gpt-4o 또는 gpt-4o-mini)
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that outputs strictly in JSON format."},
                     {"role": "user", "content": prompt}
