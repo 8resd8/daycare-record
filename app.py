@@ -4,7 +4,7 @@ import time
 import hashlib
 
 from modules.parser import CareRecordParser
-from modules.database import save_parsed_data
+from modules.parsing_database import save_parsed_data
 from modules.ai_evaluator import AIEvaluator
 
 # --- 페이지 설정 ---
