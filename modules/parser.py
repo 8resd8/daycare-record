@@ -3,6 +3,14 @@ import re
 import os
 
 class CareRecordParser:
+    STATUS_DONE = "완료"
+    STATUS_NOT_DONE = "미실시"
+    TRANSPORT_PROVIDED = "제공"
+    TRANSPORT_NOT_PROVIDED = "미제공"
+    ABSENCE_TOTAL_STATUSES = {"미이용", "결석"}
+    CHECKED_SYMBOLS = ("■", "Π", "V", "O", "☑")
+    BATH_NOT_AVAILABLE = "없음"
+
     def __init__(self, pdf_file):
         self.pdf_file = pdf_file
         self.parsed_data = []
@@ -127,46 +135,57 @@ class CareRecordParser:
                 "start_time": basic_info.get("start_time"),
                 "end_time": basic_info.get("end_time"),
                 "total_service_time": basic_info.get("total_service_time"),
-                "transport_service": basic_info.get("transport_service", "미제공"),
+                "transport_service": basic_info.get("transport_service", self.TRANSPORT_NOT_PROVIDED),
                 "transport_vehicles": basic_info.get("transport_vehicles", ""),
 
                 # 1. 신체활동지원
-                "hygiene_care": "미실시",
+                "hygiene_care": self.STATUS_NOT_DONE,
                 "bath_time": "-", "bath_method": "-",
                 "meal_breakfast": "-", "meal_lunch": "-", "meal_dinner": "-",
                 "toilet_care": "-",
-                "mobility_care": "미실시",
+                "mobility_care": self.STATUS_NOT_DONE,
                 "physical_note": "",
                 "writer_phy": None,
 
                 # 2. 인지관리
-                "cog_support": "미실시", "comm_support": "미실시",
+                "cog_support": self.STATUS_NOT_DONE, "comm_support": self.STATUS_NOT_DONE,
                 "cognitive_note": "",
                 "writer_cog": None,
 
                 # 3. 간호관리
-                "bp_temp": "-", "health_manage": "미실시",
-                "nursing_manage": "미실시", "emergency": "미실시",
+                "bp_temp": "-", "health_manage": self.STATUS_NOT_DONE,
+                "nursing_manage": self.STATUS_NOT_DONE, "emergency": self.STATUS_NOT_DONE,
                 "nursing_note": "",
                 "writer_nur": None,
 
                 # 4. 기능회복
-                "prog_basic": "미실시", "prog_activity": "미실시",
-                "prog_cognitive": "미실시", "prog_therapy": "미실시",
+                "prog_basic": self.STATUS_NOT_DONE, "prog_activity": self.STATUS_NOT_DONE,
+                "prog_cognitive": self.STATUS_NOT_DONE, "prog_therapy": self.STATUS_NOT_DONE,
                 "prog_enhance_detail": "",
                 "functional_note": "",
                 "writer_func": None
             }
 
             # --- 데이터 매핑 ---
+            is_absent = False
             if idx["total_time"] != -1:
                 total_val = self._get_cell(table, idx["total_time"], col_idx)
                 if total_val:
                     normalized_total = total_val.replace(" ", "")
                     record["total_service_time"] = normalized_total
-                    if normalized_total in ("미이용", "결석"):
+                    if normalized_total in self.ABSENCE_TOTAL_STATUSES:
                         record["start_time"] = None
                         record["end_time"] = None
+                        record["transport_service"] = self.TRANSPORT_NOT_PROVIDED
+                        record["transport_vehicles"] = ""
+                        is_absent = True
+
+            if not is_absent and idx.get("transport", -1) != -1:
+                transport_cell = self._get_cell(table, idx["transport"], col_idx)
+                parsed_transport = self._parse_transport_cell(transport_cell)
+                if parsed_transport:
+                    record["transport_service"] = parsed_transport["service"]
+                    record["transport_vehicles"] = parsed_transport["vehicles"]
 
             if idx["time"] != -1:
                 val = self._get_cell(table, idx["time"], col_idx)
@@ -281,6 +300,7 @@ class CareRecordParser:
             "hygiene": -1, "bath_time": -1, "bath_method": -1,
             "meal_bk": -1, "meal_ln": -1, "meal_dn": -1,
             "excretion": -1, "mobility": -1,
+            "transport": -1,
             "note_phy": -1, "writer_phy": -1,
             "cog_sup": -1, "comm_sup": -1, "note_cog": -1, "writer_cog": -1,
             "bp_temp": -1, "health": -1, "nursing": -1, "emergency": -1, "note_nur": -1, "writer_nur": -1,
@@ -305,6 +325,7 @@ class CareRecordParser:
             elif "저녁" in label: idx["meal_dn"] = i
             elif "화장실" in label or "기저귀" in label: idx["excretion"] = i
             elif "이동도움" in label: idx["mobility"] = i
+            elif "이동서비스" in label: idx["transport"] = i
 
             # 인지
             elif "인지관리지원" in label: idx["cog_sup"] = i
@@ -404,15 +425,30 @@ class CareRecordParser:
         if plates:
             unique = list(dict.fromkeys(plates))
             info["transport_vehicles"] = ", ".join(unique)
-            info["transport_service"] = "제공"
-        elif raw_transport:
-            normalized = re.sub(r"[^\w가-힣]", "", raw_transport)
-            if "■" in raw_transport or ("제공" in normalized and "미제공" not in normalized):
-                info["transport_service"] = "제공"
-            elif "미제공" in normalized or "□" in raw_transport:
-                info["transport_service"] = "미제공"
+
+        if raw_transport or plates:
+            provided = "■" in raw_transport
+            info["transport_service"] = self.TRANSPORT_PROVIDED if provided else self.TRANSPORT_NOT_PROVIDED
 
         return info
+
+    def _parse_transport_cell(self, cell_value):
+        if not cell_value:
+            return None
+
+        raw = str(cell_value).strip()
+        if not raw:
+            return None
+
+        provided = "■" in raw
+        cleaned = re.sub(r"[^\d가-힣, ]", " ", raw)
+        plates = re.findall(r"\d{2,3}[가-힣]\d{4}", cleaned)
+        vehicles = ", ".join(dict.fromkeys(plates)) if plates else ""
+
+        return {
+            "service": self.TRANSPORT_PROVIDED if provided else self.TRANSPORT_NOT_PROVIDED,
+            "vehicles": vehicles
+        }
 
     def _get_cell(self, table, row, col):
         try: return str(table[row][col]).replace("\n", " ").strip() if table[row][col] else ""
