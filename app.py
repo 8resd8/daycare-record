@@ -26,6 +26,10 @@ if "active_doc_id" not in st.session_state:
     st.session_state.active_doc_id = None
 if "ai_suggestion_tables" not in st.session_state:
     st.session_state.ai_suggestion_tables = {}
+if "active_person_key" not in st.session_state:
+    st.session_state.active_person_key = None
+if "person_completion" not in st.session_state:
+    st.session_state.person_completion = {}
 
 # --- 헬퍼 함수 ---
 def _get_active_doc():
@@ -37,35 +41,89 @@ def _get_active_doc():
             return d
     return None
 
-def _doc_display_name(doc):
-    """문서 이름을 포맷팅합니다 (완료 여부 포함)."""
-    name = doc.get("name", "(unknown)")
-    if doc.get("completed"):
-        return f"[완료] {name}"
-    return name
+def _get_person_keys_for_doc(doc):
+    seen = set()
+    keys = []
+    for record in doc.get("parsed_data", []):
+        person = record.get("customer_name") or "미상"
+        key = f"{doc['id']}::{person}"
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
 
-def toggle_completion(doc_id):
-    """체크박스 상태 변경 시 즉시 데이터를 업데이트하는 콜백 함수"""
-    for d in st.session_state.docs:
-        if d["id"] == doc_id:
-            d["completed"] = not d["completed"]
-            break
+def _iter_person_entries():
+    entries = []
+    for doc in st.session_state.docs:
+        counts = {}
+        for record in doc.get("parsed_data", []):
+            person = record.get("customer_name") or "미상"
+            key = f"{doc['id']}::{person}"
+            if key not in counts:
+                counts[key] = {
+                    "key": key,
+                    "doc_id": doc["id"],
+                    "doc_name": doc["name"],
+                    "person_name": person,
+                    "record_count": 0,
+                }
+            counts[key]["record_count"] += 1
+        entries.extend(counts.values())
+    return entries
 
-def delete_document(doc_id):
-    """문서를 삭제하고 상태를 정리하는 함수"""
-    # 리스트에서 해당 문서 제거
-    st.session_state.docs = [d for d in st.session_state.docs if d["id"] != doc_id]
+def _ensure_active_person():
+    active_doc = _get_active_doc()
+    if not active_doc:
+        st.session_state.active_person_key = None
+        return None
 
-    # 만약 현재 보고 있던 문서를 삭제했다면 active_doc_id 초기화
-    if st.session_state.active_doc_id == doc_id:
-        if st.session_state.docs:
-            st.session_state.active_doc_id = st.session_state.docs[0]["id"]
-        else:
-            st.session_state.active_doc_id = None
+    key = st.session_state.get("active_person_key")
+    if key and key.startswith(f"{active_doc['id']}::"):
+        return key
 
-    # AI 제안 테이블 등 관련 데이터 정리 (선택사항)
-    if not st.session_state.docs:
-        st.session_state.ai_suggestion_tables = {}
+    doc_keys = _get_person_keys_for_doc(active_doc)
+    if doc_keys:
+        st.session_state.active_person_key = doc_keys[0]
+        return doc_keys[0]
+
+    st.session_state.active_person_key = None
+    return None
+
+def _person_checkbox_key(person_key: str) -> str:
+    return f"person_cb_{hashlib.sha1(person_key.encode('utf-8')).hexdigest()[:8]}"
+
+def _select_person(person_key: str, doc_id: str):
+    st.session_state.active_person_key = person_key
+    st.session_state.active_doc_id = doc_id
+    target = _person_checkbox_key(person_key)
+    for key in list(st.session_state.keys()):
+        if key.startswith("person_cb_"):
+            st.session_state[key] = (key == target)
+
+def _get_active_person_records():
+    person_key = _ensure_active_person()
+    if not person_key or "::" not in person_key:
+        return None, None, []
+    doc_id, person_name = person_key.split("::", 1)
+    doc = next((d for d in st.session_state.docs if d["id"] == doc_id), None)
+    if not doc:
+        return None, None, []
+    person_records = [
+        r for r in doc.get("parsed_data", [])
+        if (r.get("customer_name") or "미상") == person_name
+    ]
+    return doc, person_name, person_records
+
+def _record_eval_key(record):
+    person = record.get("customer_name") or "미상"
+    date = record.get("date") or "-"
+    return f"{person}::{date}"
+
+def _get_person_done(key: str) -> bool:
+    return st.session_state.person_completion.get(key, False)
+
+def _set_person_done(key: str, value: bool):
+    st.session_state.person_completion[key] = value
 
 # --- 사이드바: 파일 업로드 및 선택 ---
 with st.sidebar:
@@ -130,71 +188,51 @@ with st.sidebar:
         # 새로 추가된 파일이 있으면 그 파일로 자동 전환
         if newly_added_id:
             st.session_state.active_doc_id = newly_added_id
+            st.session_state.active_person_key = None
             st.rerun()
 
     st.divider()
 
-    # 2. 문서 선택 및 관리 섹션
     if st.session_state.docs:
-        st.subheader("📋 문서 목록")
+        if not st.session_state.active_doc_id:
+            st.session_state.active_doc_id = st.session_state.docs[0]["id"]
 
-        # Selectbox
-        doc_map = {d["id"]: d for d in st.session_state.docs}
-        doc_ids = [d["id"] for d in st.session_state.docs]
+        active_doc = _get_active_doc()
+        st.subheader("📄 현재 파일")
+        if active_doc:
+            st.write(f"**{active_doc['name']}**")
+        else:
+            st.write("-")
 
-        # 현재 active_doc_id가 유효한지 확인
-        if st.session_state.active_doc_id not in doc_ids:
-            if doc_ids:
-                st.session_state.active_doc_id = doc_ids[0]
-            else:
-                st.session_state.active_doc_id = None
-
-        if st.session_state.active_doc_id:
-            selected_id = st.selectbox(
-                "분석할 파일을 선택하세요:",
-                options=doc_ids,
-                format_func=lambda x: _doc_display_name(doc_map[x]),
-                index=doc_ids.index(st.session_state.active_doc_id),
-                key="sb_doc_selector"
-            )
-
-            if selected_id != st.session_state.active_doc_id:
-                st.session_state.active_doc_id = selected_id
-                st.rerun()
-
-            st.info(f"현재 선택됨: **{doc_map[st.session_state.active_doc_id]['name']}**")
-
-        st.divider()
-
-        # (2) 진행 상태 관리 및 삭제 (수정된 부분)
-        with st.expander("✅ 진행 상태", expanded=True):
-            # 리스트 복사본을 사용하여 순회 중 삭제 문제 방지
-            for d in list(st.session_state.docs):
-                is_active = (d["id"] == st.session_state.active_doc_id)
-
-                # 레이아웃: 체크박스(8) + 삭제버튼(2)
-                c1, c2 = st.columns([0.85, 0.15])
-
-                with c1:
-                    label = d["name"]
-                    if is_active:
-                        label = f"👉 {label}" # 현재 선택된 파일 강조
-
-                    # 체크 즉시 상태 반영
-                    st.checkbox(
-                        label,
-                        value=d["completed"],
-                        key=f"check_{d['id']}",
-                        on_change=toggle_completion,
-                        args=(d['id'],)
-                    )
-
-                with c2:
-                    # [핵심 수정] 삭제 버튼 추가
-                    if st.button("✕", key=f"del_{d['id']}", type="tertiary", help="삭제"):
-                        delete_document(d['id'])
+        st.subheader("👥 파싱된 인원")
+        person_entries = _iter_person_entries()
+        if not person_entries:
+            st.info("파싱된 인원이 없습니다.")
+        else:
+            st.caption("이름을 선택하면 메인 화면에 상세 기록이 표시됩니다.")
+            active_person_key = _ensure_active_person()
+            for entry in person_entries:
+                is_active = entry["key"] == active_person_key
+                cols = st.columns([0.75, 0.25])
+                display_label = f"{entry['person_name']} · {entry['record_count']}건"
+                button_type = "primary" if is_active else "secondary"
+                with cols[0]:
+                    if st.button(
+                        display_label,
+                        key=f"person_btn_{entry['key']}",
+                        type=button_type,
+                        use_container_width=True,
+                        help=f"파일: {entry['doc_name']}"
+                    ):
+                        _select_person(entry["key"], entry["doc_id"])
                         st.rerun()
-
+                with cols[1]:
+                    done_value = st.checkbox(
+                        "완료",
+                        value=_get_person_done(entry["key"]),
+                        key=f"done_{entry['key']}"
+                    )
+                    _set_person_done(entry["key"], done_value)
     else:
         st.info("좌측 상단에서 PDF 파일을 업로드해주세요.")
 
@@ -205,18 +243,18 @@ main_tab1, main_tab2 = st.tabs(["📄 기록 조회 및 DB 저장", "🤖 AI 품
 # [탭 1] 기록 상세 조회 및 DB 저장
 # =========================================================
 with main_tab1:
-    active_doc = _get_active_doc()
+    doc_ctx, person_name, person_records = _get_active_person_records()
+    active_doc = doc_ctx or _get_active_doc()
 
     if not active_doc:
         st.warning("👈 왼쪽 사이드바에서 파일을 선택하거나 업로드해주세요.")
     elif active_doc.get("error"):
         st.error(f"이 파일은 파싱 중 오류가 발생했습니다: {active_doc['error']}")
-    elif not active_doc.get("parsed_data"):
-        st.warning("데이터가 없는 파일입니다.")
+    elif not person_records:
+        st.warning("선택된 어르신의 데이터가 없습니다.")
     else:
-        data = active_doc["parsed_data"]
-        first_row = data[0] if data else {}
-        customer_name = first_row.get('customer_name', '알 수 없음')
+        data = person_records
+        customer_name = person_name or (data[0].get('customer_name', '알 수 없음') if data else '알 수 없음')
 
         st.markdown(f"### 👤 대상자: **{customer_name}** 어르신")
 
@@ -290,7 +328,6 @@ with main_tab1:
                 count = save_parsed_data(data)
                 if count > 0:
                     st.success(f"✅ {count}건의 기록이 안전하게 저장되었습니다!")
-                    active_doc['completed'] = True
                     st.rerun()
                 else:
                     st.error("저장에 실패했습니다. 로그를 확인해주세요.")
@@ -299,14 +336,15 @@ with main_tab1:
 # [탭 2] AI 품질 평가
 # =========================================================
 with main_tab2:
-    active_doc = _get_active_doc()
+    doc_ctx, person_name, person_records = _get_active_person_records()
+    active_doc = doc_ctx or _get_active_doc()
 
     if not active_doc:
         st.info("👈 왼쪽 사이드바에서 PDF 파일을 선택해주세요.")
-    elif not active_doc.get("parsed_data"):
+    elif not person_records:
         st.warning("분석할 데이터가 없습니다.")
     else:
-        st.markdown(f"### 📊 기록 품질 전수 조사 - {active_doc['name']}")
+        st.markdown(f"### 📊 기록 품질 전수 조사 - {person_name or active_doc['name']}")
 
         grade_filter = st.selectbox(
             "등급 필터",
@@ -323,9 +361,9 @@ with main_tab2:
             evaluator = AIEvaluator()
             progress_bar = st.progress(0)
             status_text = st.empty()
-            total = len(active_doc["parsed_data"])
+            total = len(person_records)
 
-            for i, record in enumerate(active_doc["parsed_data"]):
+            for i, record in enumerate(person_records):
                 status_text.text(f"🔍 {record.get('date')} 기록 분석 중...")
                 result = evaluator.evaluate_daily_record(record)
                 if result:
@@ -363,7 +401,7 @@ with main_tab2:
                 rows = []
                 for date, res in active_doc["eval_results"].items():
                     item = _pick_item(res or {}, category_key)
-                    original_record = next((r for r in active_doc["parsed_data"] if r["date"] == date), {})
+                    original_record = next((r for r in person_records if r["date"] == date), {})
 
                     grade = item.get("grade", "-")
                     if grade_filter != "전체" and grade != grade_filter:
