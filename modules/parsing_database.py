@@ -44,13 +44,26 @@ def get_or_create_customer(cursor, record):
     return cursor.lastrowid
 
 
-def _upsert_daily_info(cursor, customer_id, record):
+def _find_existing_record_id(cursor, customer_id, record_date):
     cursor.execute(
         "SELECT record_id FROM daily_infos WHERE customer_id=%s AND date=%s",
-        (customer_id, record["date"]),
+        (customer_id, record_date),
     )
-    existing = cursor.fetchone()
+    row = cursor.fetchone()
+    return row[0] if row else None
 
+
+def _delete_daily_record(cursor, record_id):
+    if not record_id:
+        return
+    cursor.execute("DELETE FROM daily_physicals WHERE record_id=%s", (record_id,))
+    cursor.execute("DELETE FROM daily_cognitives WHERE record_id=%s", (record_id,))
+    cursor.execute("DELETE FROM daily_nursings WHERE record_id=%s", (record_id,))
+    cursor.execute("DELETE FROM daily_recoveries WHERE record_id=%s", (record_id,))
+    cursor.execute("DELETE FROM daily_infos WHERE record_id=%s", (record_id,))
+
+
+def _insert_daily_info(cursor, customer_id, record):
     payload = (
         record.get("start_time"),
         record.get("end_time"),
@@ -58,23 +71,6 @@ def _upsert_daily_info(cursor, customer_id, record):
         record.get("transport_service"),
         record.get("transport_vehicles"),
     )
-
-    if existing:
-        record_id = existing[0]
-        cursor.execute(
-            """
-            UPDATE daily_infos
-               SET start_time=%s,
-                   end_time=%s,
-                   total_service_time=%s,
-                   transport_service=%s,
-                   transport_vehicles=%s
-             WHERE record_id=%s
-            """,
-            (*payload, record_id),
-        )
-        return record_id
-
     cursor.execute(
         """
         INSERT INTO daily_infos (
@@ -182,7 +178,11 @@ def save_parsed_data(records):
     try:
         for record in records:
             customer_id = get_or_create_customer(cursor, record)
-            record_id = _upsert_daily_info(cursor, customer_id, record)
+            existing_id = _find_existing_record_id(cursor, customer_id, record["date"])
+            if existing_id:
+                _delete_daily_record(cursor, existing_id)
+
+            record_id = _insert_daily_info(cursor, customer_id, record)
 
             _replace_daily_physicals(cursor, record_id, record)
             _replace_daily_cognitives(cursor, record_id, record)
