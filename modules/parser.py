@@ -73,6 +73,8 @@ class CareRecordParser:
 
         return best
 
+    # ... (기존 __init__ 및 헬퍼 메서드는 동일) ...
+
     def parse(self):
         with pdfplumber.open(self.pdf_file) as pdf:
             pages = pdf.pages
@@ -85,223 +87,283 @@ class CareRecordParser:
         return self.parsed_data
 
     def _parse_page(self, page):
-        # 테이블 추출
-        table = page.extract_table(table_settings={
+        # 1. 페이지 내의 섹션 헤더 위치 찾기 (별지 구분용)
+        section_headers = []
+        # [수정] "cog" (인지관리) 키워드 추가됨
+        keywords = [
+            ("phy", ["신체활동지원", "신체 활동 지원", "신체활동"]),
+            ("nur", ["건강 및 간호", "간호관리", "건강관리"]),
+            ("func", ["기능회복", "기능 회복"]),
+            ("cog", ["인지관리", "의사소통", "인지 관리", "인지지원"])
+        ]
+
+        for key, labels in keywords:
+            for label in labels:
+                matches = page.search(label)
+                if matches:
+                    # 가장 마지막에 발견된 해당 키워드의 위치를 사용
+                    for match in matches:
+                        section_headers.append({"type": key, "top": match["top"]})
+
+        # 위치 순서대로 정렬 (위 -> 아래)
+        section_headers.sort(key=lambda x: x["top"])
+
+        # 2. 페이지 내 모든 테이블 찾기
+        tables = page.find_tables(table_settings={
             "vertical_strategy": "lines",
             "horizontal_strategy": "lines",
             "snap_tolerance": 4,
         })
 
-        if not table: return
+        if not tables:
+            return
 
         basic_info = self._basic_info or {}
 
-        if self._debug:
+        for table_obj in tables:
+            # 테이블 데이터 추출
+            table_data = table_obj.extract()
+            if not table_data: continue
+
+            # [별지 테이블 판별 및 카테고리 할당]
+            if self._is_appendix_table(table_data):
+                table_top = table_obj.bbox[1]
+                category = "func" # 기본값 (헤더를 못 찾을 경우 대비)
+
+                # 테이블보다 위에 있는 헤더 중 가장 가까운 것 찾기
+                closest_diff = float('inf')
+                for header in section_headers:
+                    if header["top"] < table_top:
+                        diff = table_top - header["top"]
+                        if diff < closest_diff:
+                            closest_diff = diff
+                            category = header["type"]
+
+                # 디버깅용 출력
+                if self._debug:
+                    print(f"[PARSER_DEBUG] Appendix Table Found. Cat: {category}, Rows: {len(table_data)}")
+
+                self._parse_appendix_table(table_data, category)
+                continue
+
+            # --- 메인 기록지 파싱 로직 ---
+            idx = self._find_row_indices(table_data)
+            if idx["date"] == -1: continue # 날짜 행이 없으면 스킵
+
+            date_row = table_data[idx["date"]]
+
+            for col_idx in range(len(date_row)):
+                raw_date = date_row[col_idx]
+                if not raw_date or "월/일" in str(raw_date): continue
+
+                current_date = self._clean_date(raw_date)
+                if not current_date: continue
+
+                customer_name = self._personal_info.get("customer_name") or self._extract_customer_name(table_data)
+
+                record = {
+                    "date": current_date,
+                    "customer_name": customer_name,
+                    "customer_birth_date": self._personal_info.get("birth_date"),
+                    "customer_grade": self._personal_info.get("care_grade"),
+                    "customer_recognition_no": self._personal_info.get("recognition_no"),
+                    "facility_name": self._personal_info.get("facility_name"),
+                    "facility_code": self._personal_info.get("facility_code"),
+                    "start_time": basic_info.get("start_time"),
+                    "end_time": basic_info.get("end_time"),
+                    "total_service_time": basic_info.get("total_service_time"),
+                    "transport_service": basic_info.get("transport_service", self.TRANSPORT_NOT_PROVIDED),
+                    "transport_vehicles": basic_info.get("transport_vehicles", ""),
+
+                    # 1. 신체활동지원
+                    "hygiene_care": self.STATUS_NOT_DONE,
+                    "bath_time": "-", "bath_method": "-",
+                    "meal_breakfast": "-", "meal_lunch": "-", "meal_dinner": "-",
+                    "toilet_care": "-",
+                    "mobility_care": self.STATUS_NOT_DONE,
+                    "physical_note": "",
+                    "writer_phy": None,
+
+                    # 2. 인지관리
+                    "cog_support": self.STATUS_NOT_DONE, "comm_support": self.STATUS_NOT_DONE,
+                    "cognitive_note": "",
+                    "writer_cog": None,
+
+                    # 3. 간호관리
+                    "bp_temp": "-", "health_manage": self.STATUS_NOT_DONE,
+                    "nursing_manage": self.STATUS_NOT_DONE, "emergency": self.STATUS_NOT_DONE,
+                    "nursing_note": "",
+                    "writer_nur": None,
+
+                    # 4. 기능회복
+                    "prog_basic": self.STATUS_NOT_DONE, "prog_activity": self.STATUS_NOT_DONE,
+                    "prog_cognitive": self.STATUS_NOT_DONE, "prog_therapy": self.STATUS_NOT_DONE,
+                    "prog_enhance_detail": "",
+                    "functional_note": "",
+                    "writer_func": None
+                }
+
+                # --- 데이터 매핑 ---
+                is_absent = False
+                if idx["total_time"] != -1:
+                    total_val = self._get_cell(table_data, idx["total_time"], col_idx)
+                    if total_val:
+                        normalized_total = total_val.replace(" ", "")
+                        record["total_service_time"] = normalized_total
+                        if normalized_total in self.ABSENCE_TOTAL_STATUSES:
+                            record["start_time"] = None
+                            record["end_time"] = None
+                            record["transport_service"] = self.TRANSPORT_NOT_PROVIDED
+                            record["transport_vehicles"] = ""
+                            is_absent = True
+
+                if not is_absent and idx.get("transport", -1) != -1:
+                    transport_cell = self._get_cell(table_data, idx["transport"], col_idx)
+                    parsed_transport = self._parse_transport_cell(transport_cell)
+                    if parsed_transport:
+                        record["transport_service"] = parsed_transport["service"]
+                        record["transport_vehicles"] = parsed_transport["vehicles"]
+
+                if idx["time"] != -1:
+                    val = self._get_cell(table_data, idx["time"], col_idx)
+                    if val and "~" in val:
+                        times = val.split("~")
+                        record["start_time"] = times[0].strip()
+                        record["end_time"] = times[1].strip()
+
+                if idx["hygiene"] != -1: record["hygiene_care"] = self._check_status(self._get_cell(table_data, idx["hygiene"], col_idx))
+
+                b_time = self._get_cell(table_data, idx["bath_time"], col_idx) if idx["bath_time"] != -1 else ""
+                b_method = self._get_cell(table_data, idx["bath_method"], col_idx) if idx["bath_method"] != -1 else ""
+
+                if (not b_time or b_time == "-") and (not b_method or b_method == "-"):
+                    record["bath_time"] = "없음"
+                    record["bath_method"] = ""
+                else:
+                    record["bath_time"] = b_time
+                    record["bath_method"] = b_method
+
+                if idx["meal_bk"] != -1: record["meal_breakfast"] = self._get_cell(table_data, idx["meal_bk"], col_idx)
+                if idx["meal_ln"] != -1: record["meal_lunch"] = self._get_cell(table_data, idx["meal_ln"], col_idx)
+                if idx["meal_dn"] != -1: record["meal_dinner"] = self._get_cell(table_data, idx["meal_dn"], col_idx)
+
+                if idx["excretion"] != -1: record["toilet_care"] = self._get_cell(table_data, idx["excretion"], col_idx)
+                if idx["mobility"] != -1: record["mobility_care"] = self._check_status(self._get_cell(table_data, idx["mobility"], col_idx))
+
+                if idx["cog_sup"] != -1: record["cog_support"] = self._check_status(self._get_cell(table_data, idx["cog_sup"], col_idx))
+                if idx["comm_sup"] != -1: record["comm_support"] = self._check_status(self._get_cell(table_data, idx["comm_sup"], col_idx))
+                if idx["bp_temp"] != -1: record["bp_temp"] = self._get_cell(table_data, idx["bp_temp"], col_idx)
+                if idx["health"] != -1: record["health_manage"] = self._check_status(self._get_cell(table_data, idx["health"], col_idx))
+                if idx["nursing"] != -1: record["nursing_manage"] = self._check_status(self._get_cell(table_data, idx["nursing"], col_idx))
+                if idx["emergency"] != -1: record["emergency"] = self._check_status(self._get_cell(table_data, idx["emergency"], col_idx))
+
+                if idx["prog_basic"] != -1: record["prog_basic"] = self._check_status(self._get_cell(table_data, idx["prog_basic"], col_idx))
+                if idx["prog_act"] != -1: record["prog_activity"] = self._check_status(self._get_cell(table_data, idx["prog_act"], col_idx))
+                if idx["prog_cog"] != -1: record["prog_cognitive"] = self._check_status(self._get_cell(table_data, idx["prog_cog"], col_idx))
+                if idx["prog_ther"] != -1: record["prog_therapy"] = self._check_status(self._get_cell(table_data, idx["prog_ther"], col_idx))
+                if idx["prog_detail"] != -1:
+                    record["prog_enhance_detail"] = self._pick_nearby_text(table_data, idx["prog_detail"], col_idx, window=8)
+
+                if idx["note_phy"] != -1: record["physical_note"] = self._get_cell(table_data, idx["note_phy"], col_idx)
+                if idx["note_cog"] != -1: record["cognitive_note"] = self._get_cell(table_data, idx["note_cog"], col_idx)
+                if idx["note_nur"] != -1: record["nursing_note"] = self._get_cell(table_data, idx["note_nur"], col_idx)
+                if idx["note_func"] != -1: record["functional_note"] = self._get_cell(table_data, idx["note_func"], col_idx)
+
+                if idx["writer_phy"] != -1: record["writer_phy"] = self._get_cell(table_data, idx["writer_phy"], col_idx)
+                if idx["writer_cog"] != -1: record["writer_cog"] = self._get_cell(table_data, idx["writer_cog"], col_idx)
+                if idx["writer_nur"] != -1: record["writer_nur"] = self._get_cell(table_data, idx["writer_nur"], col_idx)
+                if idx["writer_func"] != -1: record["writer_func"] = self._get_cell(table_data, idx["writer_func"], col_idx)
+
+                self.parsed_data.append(record)
+
+    def _parse_appendix_table(self, table, category):
+        """
+        category: 'phy' (신체), 'nur' (간호), 'func' (기능)
+        별지 데이터를 파싱하여 self.appendix_notes에 {날짜: {카테고리: 내용}} 형태로 저장
+        """
+        last_seen_date = None
+
+        for row in table:
             try:
-                print(f"[PARSER_DEBUG] table extracted: rows={len(table)} cols~={max(len(r) for r in table) if table else 0}")
-            except Exception:
-                print("[PARSER_DEBUG] table extracted")
+                # 첫 번째 열과 두 번째 열 가져오기
+                if len(row) < 2: continue
+                col1, col2 = row[0], row[1]
 
-        # [디버그 수정] 별지 테이블 감지 로직 강화
-        # 헤더를 확인하는 대신, 데이터 패턴(날짜+긴글)을 확인하여 별지로 등록
-        if self._is_appendix_table(table):
-            self._parse_appendix_table(table)
-            return
+                raw_date = str(col1).strip() if col1 else ""
+                content = str(col2).strip() if col2 else ""
 
-        # 메인 기록지 파싱
-        idx = self._find_row_indices(table)
-        if idx["date"] == -1: return
+                # 날짜 파싱
+                current_date = None
+                if re.match(r'\d{4}[\.-]\d{2}[\.-]\d{2}', raw_date):
+                    current_date = raw_date.replace(".", "-").strip()
+                    last_seen_date = current_date # 날짜 갱신
+                elif not raw_date and content and last_seen_date:
+                    # 날짜 셀이 병합되어 비어있지만 내용은 있는 경우, 직전 날짜 사용
+                    current_date = last_seen_date
 
-        if self._debug:
-            print(f"[PARSER_DEBUG] row indices: {idx}")
-            if idx.get("prog_detail", -1) != -1:
-                try:
-                    r = table[idx["prog_detail"]]
-                    sample = [self._get_cell(table, idx["prog_detail"], j) for j in range(min(len(r), 12))]
-                    print(f"[PARSER_DEBUG] prog_detail row(first 12 cells): {sample}")
-                except Exception as e:
-                    print(f"[PARSER_DEBUG] prog_detail row read failed: {e}")
+                if not current_date or not content:
+                    continue
 
-        date_row = table[idx["date"]]
+                # 내용 정제
+                clean_content = content.replace("\n", " ").strip()
 
-        for col_idx in range(len(date_row)):
-            raw_date = date_row[col_idx]
-            if not raw_date or "월/일" in str(raw_date): continue
+                # 저장 구조: { '2025-11-05': { 'phy': '...', 'nur': '...' } }
+                if current_date not in self.appendix_notes:
+                    self.appendix_notes[current_date] = {}
 
-            current_date = self._clean_date(raw_date)
-            if not current_date: continue
+                if category in self.appendix_notes[current_date]:
+                    self.appendix_notes[current_date][category] += " / " + clean_content
+                else:
+                    self.appendix_notes[current_date][category] = clean_content
 
-            customer_name = self._personal_info.get("customer_name") or self._extract_customer_name(table)
+            except Exception as e:
+                if self._debug: print(f"[PARSER_ERR] Appendix parse error: {e}")
+                continue
 
-            record = {
-                "date": current_date,
-                "customer_name": customer_name,
-                "customer_birth_date": self._personal_info.get("birth_date"),
-                "customer_grade": self._personal_info.get("care_grade"),
-                "customer_recognition_no": self._personal_info.get("recognition_no"),
-                "facility_name": self._personal_info.get("facility_name"),
-                "facility_code": self._personal_info.get("facility_code"),
-                "start_time": basic_info.get("start_time"),
-                "end_time": basic_info.get("end_time"),
-                "total_service_time": basic_info.get("total_service_time"),
-                "transport_service": basic_info.get("transport_service", self.TRANSPORT_NOT_PROVIDED),
-                "transport_vehicles": basic_info.get("transport_vehicles", ""),
+    def _merge_appendix_to_main(self):
+        # [수정] 'cog' -> 'cognitive_note' 매핑 추가
+        mapping = {
+            'phy': ['physical_note'],
+            'nur': ['nursing_note'],
+            'func': ['functional_note', 'prog_enhance_detail'],
+            'cog': ['cognitive_note']
+        }
 
-                # 1. 신체활동지원
-                "hygiene_care": self.STATUS_NOT_DONE,
-                "bath_time": "-", "bath_method": "-",
-                "meal_breakfast": "-", "meal_lunch": "-", "meal_dinner": "-",
-                "toilet_care": "-",
-                "mobility_care": self.STATUS_NOT_DONE,
-                "physical_note": "",
-                "writer_phy": None,
+        for record in self.parsed_data:
+            r_date = record['date']
 
-                # 2. 인지관리
-                "cog_support": self.STATUS_NOT_DONE, "comm_support": self.STATUS_NOT_DONE,
-                "cognitive_note": "",
-                "writer_cog": None,
+            # 해당 날짜에 별지 데이터가 있는지 확인
+            if r_date in self.appendix_notes:
+                day_notes = self.appendix_notes[r_date] # { 'phy': '...', 'cog': '...' }
 
-                # 3. 간호관리
-                "bp_temp": "-", "health_manage": self.STATUS_NOT_DONE,
-                "nursing_manage": self.STATUS_NOT_DONE, "emergency": self.STATUS_NOT_DONE,
-                "nursing_note": "",
-                "writer_nur": None,
+                # 각 카테고리(phy, nur, func, cog)별로 순회
+                for category, target_fields in mapping.items():
+                    note_content = day_notes.get(category)
 
-                # 4. 기능회복
-                "prog_basic": self.STATUS_NOT_DONE, "prog_activity": self.STATUS_NOT_DONE,
-                "prog_cognitive": self.STATUS_NOT_DONE, "prog_therapy": self.STATUS_NOT_DONE,
-                "prog_enhance_detail": "",
-                "functional_note": "",
-                "writer_func": None
-            }
+                    if note_content:
+                        for field in target_fields:
+                            # 해당 필드에 '별지' 관련 문구가 있으면 덮어쓰기
+                            if self._is_placeholder(record[field]):
+                                record[field] = note_content
 
-            # --- 데이터 매핑 ---
-            is_absent = False
-            if idx["total_time"] != -1:
-                total_val = self._get_cell(table, idx["total_time"], col_idx)
-                if total_val:
-                    normalized_total = total_val.replace(" ", "")
-                    record["total_service_time"] = normalized_total
-                    if normalized_total in self.ABSENCE_TOTAL_STATUSES:
-                        record["start_time"] = None
-                        record["end_time"] = None
-                        record["transport_service"] = self.TRANSPORT_NOT_PROVIDED
-                        record["transport_vehicles"] = ""
-                        is_absent = True
-
-            if not is_absent and idx.get("transport", -1) != -1:
-                transport_cell = self._get_cell(table, idx["transport"], col_idx)
-                parsed_transport = self._parse_transport_cell(transport_cell)
-                if parsed_transport:
-                    record["transport_service"] = parsed_transport["service"]
-                    record["transport_vehicles"] = parsed_transport["vehicles"]
-
-            if idx["time"] != -1:
-                val = self._get_cell(table, idx["time"], col_idx)
-                if val and "~" in val:
-                    times = val.split("~")
-                    record["start_time"] = times[0].strip()
-                    record["end_time"] = times[1].strip()
-
-            if idx["hygiene"] != -1: record["hygiene_care"] = self._check_status(self._get_cell(table, idx["hygiene"], col_idx))
-
-            # [요청 2] 목욕 값이 없거나 '-'일 때 처리
-            b_time = self._get_cell(table, idx["bath_time"], col_idx) if idx["bath_time"] != -1 else ""
-            b_method = self._get_cell(table, idx["bath_method"], col_idx) if idx["bath_method"] != -1 else ""
-
-            # 값이 없거나 '-'만 있으면 '없음'으로 통일
-            if (not b_time or b_time == "-") and (not b_method or b_method == "-"):
-                record["bath_time"] = "없음"
-                record["bath_method"] = "" # 병합 시 깔끔하게 보이도록
-            else:
-                record["bath_time"] = b_time
-                record["bath_method"] = b_method
-
-            # 식사
-            if idx["meal_bk"] != -1: record["meal_breakfast"] = self._get_cell(table, idx["meal_bk"], col_idx)
-            if idx["meal_ln"] != -1: record["meal_lunch"] = self._get_cell(table, idx["meal_ln"], col_idx)
-            if idx["meal_dn"] != -1: record["meal_dinner"] = self._get_cell(table, idx["meal_dn"], col_idx)
-
-            if idx["excretion"] != -1: record["toilet_care"] = self._get_cell(table, idx["excretion"], col_idx)
-            if idx["mobility"] != -1: record["mobility_care"] = self._check_status(self._get_cell(table, idx["mobility"], col_idx))
-
-            # 인지/간호/기능 상태값
-            if idx["cog_sup"] != -1: record["cog_support"] = self._check_status(self._get_cell(table, idx["cog_sup"], col_idx))
-            if idx["comm_sup"] != -1: record["comm_support"] = self._check_status(self._get_cell(table, idx["comm_sup"], col_idx))
-            if idx["bp_temp"] != -1: record["bp_temp"] = self._get_cell(table, idx["bp_temp"], col_idx)
-            if idx["health"] != -1: record["health_manage"] = self._check_status(self._get_cell(table, idx["health"], col_idx))
-            if idx["nursing"] != -1: record["nursing_manage"] = self._check_status(self._get_cell(table, idx["nursing"], col_idx))
-            if idx["emergency"] != -1: record["emergency"] = self._check_status(self._get_cell(table, idx["emergency"], col_idx))
-
-            if idx["prog_basic"] != -1: record["prog_basic"] = self._check_status(self._get_cell(table, idx["prog_basic"], col_idx))
-            if idx["prog_act"] != -1: record["prog_activity"] = self._check_status(self._get_cell(table, idx["prog_act"], col_idx))
-            if idx["prog_cog"] != -1: record["prog_cognitive"] = self._check_status(self._get_cell(table, idx["prog_cog"], col_idx))
-            if idx["prog_ther"] != -1: record["prog_therapy"] = self._check_status(self._get_cell(table, idx["prog_ther"], col_idx))
-            if idx["prog_detail"] != -1:
-                record["prog_enhance_detail"] = self._pick_nearby_text(table, idx["prog_detail"], col_idx, window=8)
-                if self._debug and record["prog_enhance_detail"]:
-                    print(f"[PARSER_DEBUG] {record['date']} prog_enhance_detail(len={len(record['prog_enhance_detail'])}): {record['prog_enhance_detail'][:80]}")
-                elif self._debug:
-                    print(f"[PARSER_DEBUG] {record['date']} prog_enhance_detail is empty")
-
-            # 특이사항
-            if idx["note_phy"] != -1: record["physical_note"] = self._get_cell(table, idx["note_phy"], col_idx)
-            if idx["note_cog"] != -1: record["cognitive_note"] = self._get_cell(table, idx["note_cog"], col_idx)
-            if idx["note_nur"] != -1: record["nursing_note"] = self._get_cell(table, idx["note_nur"], col_idx)
-            if idx["note_func"] != -1: record["functional_note"] = self._get_cell(table, idx["note_func"], col_idx)
-
-            # 작성자
-            if idx["writer_phy"] != -1: record["writer_phy"] = self._get_cell(table, idx["writer_phy"], col_idx)
-            if idx["writer_cog"] != -1: record["writer_cog"] = self._get_cell(table, idx["writer_cog"], col_idx)
-            if idx["writer_nur"] != -1: record["writer_nur"] = self._get_cell(table, idx["writer_nur"], col_idx)
-            if idx["writer_func"] != -1: record["writer_func"] = self._get_cell(table, idx["writer_func"], col_idx)
-
-            self.parsed_data.append(record)
+            # 별지 처리 후에도 여전히 '별지첨부'만 남아있는 경우 처리
+            all_target_fields = ['physical_note', 'nursing_note', 'functional_note', 'cognitive_note']
+            for field in all_target_fields:
+                if self._is_placeholder(record[field]):
+                    # 데이터는 없는데 별지라고 써있으면 경고 표시
+                    record[field] += " (⚠️별지 내용 미발견)"
 
     def _is_appendix_table(self, table):
         """ 테이블 행 중에 날짜(YYYY.MM.DD) 형식의 데이터가 포함되어 있으면 별지로 간주 """
+        if not table:
+            return False
         for row in table:
             if len(row) < 2: continue
             first_col = str(row[0]).strip()
-            # 2025.11.14 형식 체크
+            # 2025.11.14 또는 2025-11-14 형식 체크
             if re.match(r'\d{4}[\.-]\d{2}[\.-]\d{2}', first_col):
                 return True
         return False
-
-    def _parse_appendix_table(self, table):
-        for row in table:
-            try:
-                # 헤더(날짜/내용) 행은 건너뜀 (날짜 형식이 아닐 테니 정규식에서 걸러짐)
-                raw_date, content = row[0], row[1]
-                if not raw_date or not content: continue
-
-                # 날짜 정규식 체크 (YYYY.MM.DD 또는 YYYY-MM-DD)
-                if not re.match(r'\d{4}[\.-]\d{2}[\.-]\d{2}', str(raw_date)):
-                    continue
-
-                clean_date = str(raw_date).replace(".", "-").strip()
-                clean_content = str(content).replace("\n", " ").strip()
-
-                if clean_date in self.appendix_notes:
-                    self.appendix_notes[clean_date] += " / " + clean_content
-                else:
-                    self.appendix_notes[clean_date] = clean_content
-            except: continue
-
-    def _merge_appendix_to_main(self):
-        target_fields = ['physical_note', 'cognitive_note', 'nursing_note', 'functional_note']
-        for record in self.parsed_data:
-            r_date = record['date']
-            if r_date in self.appendix_notes:
-                appendix = self.appendix_notes[r_date]
-                for field in target_fields:
-                    # [요청 4] [별지] 태그 삭제하고 내용만 넣음
-                    if self._is_placeholder(record[field]):
-                        record[field] = f"{appendix}"
-            else:
-                for field in target_fields:
-                    if self._is_placeholder(record[field]):
-                        record[field] += " (⚠️내용 미발견)"
 
     def _find_row_indices(self, table):
         idx = {
