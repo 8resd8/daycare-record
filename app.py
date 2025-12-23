@@ -221,8 +221,7 @@ with st.sidebar:
                         display_label,
                         key=f"person_btn_{entry['key']}",
                         type=button_type,
-                        use_container_width=True,
-                        help=f"파일: {entry['doc_name']}"
+                        use_container_width=True
                     ):
                         _select_person(entry["key"], entry["doc_id"])
                         st.rerun()
@@ -233,6 +232,17 @@ with st.sidebar:
                         key=f"done_{entry['key']}"
                     )
                     _set_person_done(entry["key"], done_value)
+
+            st.divider()
+            if active_doc and active_doc.get("parsed_data"):
+                if st.button("💾 파싱된 인원 전체 DB 저장", use_container_width=True, type="primary"):
+                    with st.spinner("DB 저장 중..."):
+                        count = save_parsed_data(active_doc["parsed_data"])
+                        if count > 0:
+                            st.success(f"✅ {count}건의 기록이 저장되었습니다.")
+                            st.rerun()
+                        else:
+                            st.error("저장에 실패했습니다. 로그를 확인해주세요.")
     else:
         st.info("좌측 상단에서 PDF 파일을 업로드해주세요.")
 
