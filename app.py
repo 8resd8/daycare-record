@@ -8,6 +8,7 @@ from modules.pdf_parser import CareRecordParser
 from modules.database import save_parsed_data
 from modules.ai_daily_validator import AIEvaluator
 from modules.weekly_data_analyzer import compute_weekly_status
+from modules.ai_weekly_writer import generate_weekly_report
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="요양기록 AI 매니저", layout="wide", page_icon="🏥")
@@ -140,6 +141,15 @@ def _get_person_done(key: str) -> bool:
 
 def _set_person_done(key: str, value: bool):
     st.session_state.person_completion[key] = value
+
+
+def _render_copyable_report(container, text: str):
+    """주간 AI 결과를 텍스트로 렌더링합니다."""
+    if not text:
+        container.info("표시할 AI 결과가 없습니다.")
+        return
+
+    container.text_area("AI 보고서", value=text, height=220)
 
 # --- 사이드바: 파일 업로드 및 선택 ---
 with st.sidebar:
@@ -399,6 +409,37 @@ with main_tab1:
                     delta=toilet_header.get("change_label", "데이터 부족"),
                     delta_color="inverse",
                 )
+                ai_payload = trend.get("ai_payload")
+                if ai_payload:
+                    st.divider()
+                    st.markdown("#### 🤖 AI 보고 요청")
+                    ai_col, result_col = st.columns([1, 3])
+                    progress_bar = ai_col.empty()
+                    status_line = ai_col.empty()
+                    response_area = result_col.container()
+                    if ai_col.button("AI 보고 요청"):
+                        progress_bar.progress(0)
+                        status_line.text("요청 중... 0%")
+                        try:
+                            progress_bar.progress(15)
+                            status_line.text("AI 서비스에 연결 중... 15%")
+                            report = generate_weekly_report(
+                                customer_name,
+                                (prev_range[0], curr_range[1]),
+                                ai_payload,
+                            )
+                            progress_bar.progress(60)
+                            status_line.text("보고서 생성 중... 60%")
+                            if isinstance(report, dict) and report.get("error"):
+                                response_area.error(report["error"])
+                            else:
+                                text_report = report if isinstance(report, str) else str(report)
+                                _render_copyable_report(response_area, text_report)
+                            progress_bar.progress(100)
+                            status_line.text("완료: 100%")
+                        except Exception as exc:
+                            progress_bar.progress(0)
+                            status_line.error(f"요청 실패: {exc}")
         else:
             st.info("주간 비교를 위한 날짜 정보가 부족합니다.")
 

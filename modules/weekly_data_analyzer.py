@@ -329,14 +329,49 @@ def analyze_weekly_trend(
         "this": _summarize_toilet_summary(this_week_df),
     }
 
+    def _collect_category_entries(source_df: pd.DataFrame) -> Dict[str, List[str]]:
+        result: Dict[str, List[str]] = {}
+        for key, (field, label) in CATEGORIES.items():
+            result[key] = [
+                f"[{row['date'].strftime('%m-%d')}] {row[field]}"
+                for _, row in source_df.iterrows()
+                if row.get(field)
+            ]
+        return result
+
+    last_category_entries = _collect_category_entries(last_week_df)
+    this_category_entries = _collect_category_entries(this_week_df)
+
     category_notes = {}
     for key, (field, label) in CATEGORIES.items():
-        vals = [
-            f"[{row['date'].strftime('%m-%d')}] {row[field]}"
-            for _, row in this_week_df.iterrows()
-            if row.get(field)
-        ]
-        category_notes[key] = {"label": label, "entries": vals}
+        category_notes[key] = {"label": label, "entries": this_category_entries.get(key, [])}
+
+    def _format_entry_list(entries: List[str]) -> str:
+        return "\n".join(entries) if entries else "없음"
+
+    def _build_week_summary(
+        entries: Dict[str, List[str]],
+        attendance: int,
+        meal_values: Dict[str, float],
+        toilet_values: Dict[str, float],
+    ) -> Dict[str, object]:
+        return {
+            "physical": _format_entry_list(entries.get("physical", [])),
+            "cognitive": _format_entry_list(entries.get("cognitive", [])),
+            "nursing": _format_entry_list(entries.get("nursing", [])),
+            "functional": _format_entry_list(entries.get("functional", [])),
+            "attendance": attendance,
+            "meals": {
+                "일반식": meal_values["일반식"],
+                "죽식": meal_values["죽식"],
+                "다진식": meal_values["다진식"],
+            },
+            "toilet": {
+                "소변": toilet_values["urine"],
+                "대변": toilet_values["stool"],
+                "기저귀교환": toilet_values["diaper"],
+            },
+        }
 
     def _latest_text_value(source_df: pd.DataFrame, column: str) -> str:
         if source_df.empty or column not in source_df:
@@ -494,6 +529,57 @@ def analyze_weekly_trend(
             return f"{abs(percent):.1f}% 하락"
         return "변화 없음"
 
+    def _format_attendance_summary(
+        entries: Dict[str, List[str]],
+        attendance: int,
+        meal_values: Dict[str, float],
+        toilet_values: Dict[str, float],
+    ) -> Dict[str, object]:
+        def _format_entries(key: str) -> str:
+            items = entries.get(key, [])
+            return "\n".join(items) if items else "없음"
+
+        return {
+            "physical": _format_entries("physical"),
+            "cognitive": _format_entries("cognitive"),
+            "nursing": _format_entries("nursing"),
+            "functional": _format_entries("functional"),
+            "attendance": attendance,
+            "meals": {
+                "일반식": meal_values["일반식"],
+                "죽식": meal_values["죽식"],
+                "다진식": meal_values["다진식"],
+            },
+            "toilet": {
+                "소변": toilet_values["urine"],
+                "대변": toilet_values["stool"],
+                "기저귀교환": toilet_values["diaper"],
+            },
+        }
+
+    def _calc_total_meal(values: Dict[str, float]) -> float:
+        return sum(values.values())
+
+    change_payload = {
+        "meal": _format_total(this_meal_total - last_meal_total) if last_meal_total is not None else "-",
+        "toilet": _format_total(this_toilet_total - last_toilet_total) if last_toilet_total is not None else "-",
+        "toilet_breakdown": {
+            "소변": _format_total(this_toilet_totals["urine"] - last_toilet_totals["urine"]),
+            "대변": _format_total(this_toilet_totals["stool"] - last_toilet_totals["stool"]),
+            "기저귀교환": _format_total(this_toilet_totals["diaper"] - last_toilet_totals["diaper"]),
+        },
+    }
+
+    ai_payload = {
+        "current_week": _format_attendance_summary(
+            this_category_entries, attendance_curr, this_meals, this_toilet_totals
+        ),
+        "previous_week": _format_attendance_summary(
+            last_category_entries, attendance_prev, last_meals, last_toilet_totals
+        ),
+        "changes": change_payload,
+    }
+
     weekly_table = [
         {
             "주간": "저번주",
@@ -503,7 +589,7 @@ def analyze_weekly_trend(
             "식사량(다진식)": _format_total(last_meals["다진식"]),
             "소변": f"{_format_total(last_toilet_totals['urine'])}회",
             "대변": f"{_format_total(last_toilet_totals['stool'])}회",
-            "기저기교환": f"{_format_total(last_toilet_totals['diaper'])}회",
+            "기저귀교환": f"{_format_total(last_toilet_totals['diaper'])}회",
         },
         {
             "주간": "이번주",
@@ -513,7 +599,7 @@ def analyze_weekly_trend(
             "식사량(다진식)": _format_total(this_meals["다진식"]),
             "소변": f"{_format_total(this_toilet_totals['urine'])}회",
             "대변": f"{_format_total(this_toilet_totals['stool'])}회",
-            "기저기교환": f"{_format_total(this_toilet_totals['diaper'])}회",
+            "기저귀교환": f"{_format_total(this_toilet_totals['diaper'])}회",
         },
     ]
 
@@ -541,4 +627,5 @@ def analyze_weekly_trend(
         "toilet_detail": toilet_detail_summary,
         "weekly_table": weekly_table,
         "category_notes": category_notes,
+        "ai_payload": ai_payload,
     }
