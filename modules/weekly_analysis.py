@@ -14,11 +14,13 @@ POSITIVE_KEYWORDS = ["개선", "안정", "호전", "유지", "활발", "양호",
 NEGATIVE_KEYWORDS = ["악화", "저하", "불안", "통증", "문제", "감소", "주의", "거부", "통증"]
 HIGHLIGHT_KEYWORDS = ["통증", "거부", "증가", "감소", "악화", "호전", "불안", "주의", "사고"]
 MEAL_TYPES = ["일반식", "죽식", "다짐식", "경관식", "연식", "특식"]
+C_WEEKDAYS = 7
 MEAL_AMOUNT_RULES = [
     (["전량", "정량", "완", "모두", "잘"], (1.0, "전량")),
     (["절반", "1/2", "반", "50%", "이하"], (0.5, "1/2이하")),
     (["거부", "못", "불가", "0%"], (0.0, "거부")),
 ]
+ABSENCE_STATUSES = {"미이용", "결석", "일정없음"}
 CATEGORIES = {
     "physical": ("physical_note", "신체활동"),
     "cognitive": ("cognitive_note", "인지관리"),
@@ -51,6 +53,7 @@ def _fetch_two_week_records(
     query = """
         SELECT
             di.date,
+            di.total_service_time,
             dp.note AS physical_note,
             dc.note AS cognitive_note,
             dn.note AS nursing_note,
@@ -311,37 +314,6 @@ def analyze_weekly_trend(
 
     last_type = _mode(last_week_df["meal_type"])
     this_type = _mode(this_week_df["meal_type"])
-    last_score = round(last_week_df["meal_amount_score"].mean(), 2) if not last_week_df.empty else 0.0
-    this_score = round(this_week_df["meal_amount_score"].mean(), 2) if not this_week_df.empty else 0.0
-
-    def _score_trend(prev, curr):
-        diff = curr - prev
-        if diff > 0.2:
-            return "증가 📈"
-        if diff < -0.2:
-            return "감소 📉"
-        return "유지 -"
-
-    last_toilet = last_week_df["toilet_count"].mean() if not last_week_df.empty else 0.0
-    this_toilet = this_week_df["toilet_count"].mean() if not this_week_df.empty else 0.0
-
-    header = {
-        "meal_amount": {
-            "label": "식사량",
-            "trend": _score_trend(last_score, this_score),
-            "values": (last_score * 100, this_score * 100),
-        },
-        "toilet": {
-            "label": "배설",
-            "trend": "증가 ⚠️" if this_toilet > last_toilet + 1 else ("감소" if this_toilet + 1 < last_toilet else "유지"),
-            "values": (last_toilet, this_toilet),
-        },
-        "meal_type": {
-            "label": "식사 형태",
-            "change": f"{last_type} → {this_type}" if last_type != this_type else last_type,
-            "changed": last_type != this_type,
-        },
-    }
 
     notes = {
         "last": _merge_notes(last_week_df),
@@ -465,14 +437,67 @@ def analyze_weekly_trend(
                     totals[meal_type] += value
         return totals
 
+    def _is_attended(total_service_time: Optional[str]) -> bool:
+        if not total_service_time:
+            return False
+        normalized = str(total_service_time).strip()
+        return normalized not in ABSENCE_STATUSES
+
+    def _count_attendance(source_df: pd.DataFrame) -> int:
+        if source_df.empty or "total_service_time" not in source_df:
+            return 0
+        return sum(
+            1
+            for value in source_df["total_service_time"]
+            if _is_attended(value)
+        )
+
     last_toilet_totals = _sum_toilet_counts(last_week_df)
     this_toilet_totals = _sum_toilet_counts(this_week_df)
     last_meals = _sum_meals(last_week_df)
     this_meals = _sum_meals(this_week_df)
+    attendance_prev = _count_attendance(last_week_df)
+    attendance_curr = _count_attendance(this_week_df)
+
+    def _sum_totals(values: Dict[str, float]) -> float:
+        return sum(values.values())
+
+    last_meal_total = _sum_totals(last_meals)
+    this_meal_total = _sum_totals(this_meals)
+    last_toilet_total = _sum_totals(last_toilet_totals)
+    this_toilet_total = _sum_totals(this_toilet_totals)
+
+    def _ratio(total: float, count: int) -> Optional[float]:
+        if count <= 0:
+            return None
+        return total / count
+
+    meal_ratio_prev = _ratio(last_meal_total, attendance_prev)
+    meal_ratio_curr = _ratio(this_meal_total, attendance_curr)
+    toilet_ratio_prev = _ratio(last_toilet_total, attendance_prev)
+    toilet_ratio_curr = _ratio(this_toilet_total, attendance_curr)
+
+    def _percent_change(prev: Optional[float], curr: Optional[float]) -> Optional[float]:
+        if prev is None or prev == 0 or curr is None:
+            return None
+        return round((curr - prev) / prev * 100, 1)
+
+    meal_percent_change = _percent_change(meal_ratio_prev, meal_ratio_curr)
+    toilet_percent_change = _percent_change(toilet_ratio_prev, toilet_ratio_curr)
+
+    def _change_label(percent: Optional[float]) -> str:
+        if percent is None:
+            return "데이터 부족"
+        if percent > 0:
+            return f"{percent:.1f}% 상승"
+        if percent < 0:
+            return f"{abs(percent):.1f}% 하락"
+        return "변화 없음"
 
     weekly_table = [
         {
             "주간": "저번주",
+            "출석일": attendance_prev,
             "식사량(일반식)": _format_total(last_meals["일반식"]),
             "식사량(죽식)": _format_total(last_meals["죽식"]),
             "식사량(다진식)": _format_total(last_meals["다진식"]),
@@ -482,6 +507,7 @@ def analyze_weekly_trend(
         },
         {
             "주간": "이번주",
+            "출석일": attendance_curr,
             "식사량(일반식)": _format_total(this_meals["일반식"]),
             "식사량(죽식)": _format_total(this_meals["죽식"]),
             "식사량(다진식)": _format_total(this_meals["다진식"]),
@@ -490,6 +516,23 @@ def analyze_weekly_trend(
             "기저기교환": f"{_format_total(this_toilet_totals['diaper'])}회",
         },
     ]
+
+    header = {
+        "meal_amount": {
+            "label": "식사량",
+            "prev": meal_ratio_prev,
+            "curr": meal_ratio_curr,
+            "change_label": _change_label(meal_percent_change),
+            "percent": meal_percent_change,
+        },
+        "toilet": {
+            "label": "배설",
+            "prev": toilet_ratio_prev,
+            "curr": toilet_ratio_curr,
+            "change_label": _change_label(toilet_percent_change),
+            "percent": toilet_percent_change,
+        },
+    }
 
     return {
         "header": header,

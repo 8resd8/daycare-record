@@ -365,8 +365,6 @@ with main_tab1:
                 trend = result.get("trend") or {}
                 header = trend.get("header") or {}
                 weekly_table = trend.get("weekly_table") or []
-                meal_summary = trend.get("meal_detail") or {}
-                toilet_summary = trend.get("toilet_detail") or {}
                 if weekly_table:
                     st.dataframe(
                         pd.DataFrame(weekly_table),
@@ -374,71 +372,30 @@ with main_tab1:
                         hide_index=True,
                     )
 
-                    def _safe_float(value):
-                        try:
-                            return float(value)
-                        except Exception:
-                            return None
-
-                    meal_values = header.get("meal_amount", {}).get("values", ())
-                    meal_prev = _safe_float(meal_values[0]) if len(meal_values) > 0 else None
-                    meal_curr = _safe_float(meal_values[1]) if len(meal_values) > 1 else None
-                    meal_status = "식사량 데이터 부족"
-                    if meal_prev is not None and meal_curr is not None:
-                        diff = meal_curr - meal_prev
-                        status_text = "증가 ⬆️" if diff > 0 else ("감소 ⬇️" if diff < 0 else "유지 -")
-                        meal_status = (
-                            f"**저번주 기준 식사량:** {status_text} "
-                            f"({meal_prev:.0f}% → {meal_curr:.0f}%)"
-                        )
-
-                    toilet_values = header.get("toilet", {}).get("values", ())
-                    toilet_prev = _safe_float(toilet_values[0]) if len(toilet_values) > 0 else None
-                    toilet_curr = _safe_float(toilet_values[1]) if len(toilet_values) > 1 else None
-                    toilet_status = "배설 데이터 부족"
-                    if toilet_prev is not None and toilet_curr is not None:
-                        diff = toilet_curr - toilet_prev
-                        indicator = "증가 ⚠️" if diff > 0 else ("감소 📉" if diff < 0 else "유지 -")
-                        toilet_status = (
-                            f"**저번주 기준 배설 횟수:** {indicator} "
-                            f"({toilet_prev:.1f}회 → {toilet_curr:.1f}회, "
-                            f"차이 {diff:+.1f}회)"
-                        )
-
-                    st.markdown(
-                        f"{meal_status}<br/>{toilet_status}", unsafe_allow_html=True
-                    )
                 else:
                     st.info("주간 상태 변화 표를 생성할 수 없습니다.")
                 st.divider()
                 st.markdown("#### 🔍 지난주 vs 이번주 핵심 지표")
-                header_cols = st.columns(3)
+                header_cols = st.columns(2)
+                def _format_ratio(value):
+                    if value is None:
+                        return "-"
+                    try:
+                        return f"{value:.2f}"
+                    except Exception:
+                        return "-"
+
                 meal_header = header.get("meal_amount", {})
                 header_cols[0].metric(
-                    label=f"{meal_header.get('label', '식사량')} ({meal_header.get('trend', '-')})",
-                    value=f"{meal_header.get('values', ('-', '-'))[1]:.0f}%",
-                    delta=f"{meal_header.get('values', ('-', '-'))[0]:.0f}%",
+                    label="식사량 (출석당 평균)",
+                    value=_format_ratio(meal_header.get("curr")),
+                    delta=meal_header.get("change_label", "데이터 부족"),
                 )
                 toilet_header = header.get("toilet", {})
                 header_cols[1].metric(
-                    label=f"{toilet_header.get('label', '배설')} ({toilet_header.get('trend', '-')})",
-                    value=f"{toilet_header.get('values', ('-', '-'))[1]:.1f}회",
-                    delta=f"{toilet_header.get('values', ('-', '-'))[0]:.1f}회",
-                )
-                meal_type_header = header.get("meal_type", {})
-                change_text = meal_type_header.get("change") or meal_type_header.get("label", "식사 형태")
-                header_cols[2].markdown(
-                    f"**{meal_type_header.get('label', '식사 형태')}**<br />"
-                    f"<span style='color:{'red' if meal_type_header.get('changed') else '#666'};'>{change_text}</span>",
-                    unsafe_allow_html=True,
-                )
-
-                detail_cols = st.columns(2)
-                detail_cols[0].markdown(
-                    f"**🍽 식사 구성:** {meal_summary.get('this', '-') if meal_summary else '-'}"
-                )
-                detail_cols[1].markdown(
-                    f"**🚻 배설 현황:** {toilet_summary.get('this', '-') if toilet_summary else '-'}"
+                    label="배설 (출석당 평균)",
+                    value=_format_ratio(toilet_header.get("curr")),
+                    delta=toilet_header.get("change_label", "데이터 부족"),
                 )
 
                 st.markdown("#### 📝 특이사항 비교")
