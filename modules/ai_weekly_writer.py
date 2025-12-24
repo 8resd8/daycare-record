@@ -1,11 +1,9 @@
-"""AI weekly report generator (v2).
-Creates textual weekly summaries using the enhanced prompts payload.
-"""
-
 from __future__ import annotations
 
 import openai
 import streamlit as st
+
+import math
 
 from prompts import WEEKLY_WRITER_SYSTEM_PROMPT, WEEKLY_WRITER_USER_TEMPLATE
 
@@ -18,7 +16,6 @@ def _get_openai_client() -> openai.OpenAI:
 
 
 def generate_weekly_report(customer_name, date_range, analysis_payload):
-    """Generate the weekly report text from the structured payload."""
     input_content = _format_input_data(customer_name, date_range, analysis_payload)
 
     try:
@@ -35,12 +32,11 @@ def generate_weekly_report(customer_name, date_range, analysis_payload):
         if not content:
             return {"error": "AI 응답이 비어 있습니다."}
         return content.strip()
-    except Exception as exc:  # noqa: BLE001 - surface error to UI
+    except Exception as exc:
         return {"error": f"AI 생성 중 오류 발생: {exc}"}
 
 
 def _format_input_data(name, date_range, payload) -> str:
-    """Convert ai_payload structure into the prompt template string."""
 
     def _safe_dict(value):
         return value if isinstance(value, dict) else {}
@@ -95,6 +91,7 @@ def _format_input_data(name, date_range, payload) -> str:
     prev_week = _safe_dict(payload.get("previous_week"))
     curr_week = _safe_dict(payload.get("current_week"))
     changes = _safe_dict(payload.get("changes"))
+    per_attendance = _safe_dict(payload.get("per_attendance"))
 
     prev_meals = _safe_dict(prev_week.get("meals"))
     curr_meals = _safe_dict(curr_week.get("meals"))
@@ -119,6 +116,38 @@ def _format_input_data(name, date_range, payload) -> str:
 
     meal_breakdown_curr = _format_breakdown(curr_meals, "회분")
 
+    meal_avg_prev = _format_number(per_attendance.get("meal_avg_prev"), "회분")
+    meal_avg_curr = _format_number(per_attendance.get("meal_avg_curr"), "회분")
+    meal_avg_change_label = per_attendance.get("meal_avg_change_label") or "데이터 부족"
+    toilet_avg_prev = _format_number(per_attendance.get("toilet_avg_prev"), "회")
+    toilet_avg_curr = _format_number(per_attendance.get("toilet_avg_curr"), "회")
+    toilet_avg_change_label = per_attendance.get("toilet_avg_change_label") or "데이터 부족"
+
+    def _is_significant_percent(value: object, threshold: float) -> bool:
+        num = _to_float(value)
+        if num is None or not math.isfinite(num):
+            return False
+        return abs(num) >= threshold
+
+    meal_avg_percent = per_attendance.get("meal_avg_percent")
+    toilet_avg_percent = per_attendance.get("toilet_avg_percent")
+
+    show_meal_avg = _is_significant_percent(meal_avg_percent, 10.0)
+    show_toilet_avg = _is_significant_percent(toilet_avg_percent, 10.0)
+
+    reference_metrics_block = ""
+    if show_meal_avg or show_toilet_avg:
+        lines = ["# [참고 지표(판단용/출력 금지)]"]
+        if show_meal_avg:
+            lines.append(
+                f"- 식사량(출석일수 보정 평균): {meal_avg_prev} → {meal_avg_curr} ({meal_avg_change_label})"
+            )
+        if show_toilet_avg:
+            lines.append(
+                f"- 배설(출석일수 보정 평균): {toilet_avg_prev} → {toilet_avg_curr} ({toilet_avg_change_label})"
+            )
+        reference_metrics_block = "\n".join(lines)
+
     return WEEKLY_WRITER_USER_TEMPLATE.format(
         name=name,
         start_date=date_range[0].strftime("%Y-%m-%d"),
@@ -128,9 +157,16 @@ def _format_input_data(name, date_range, payload) -> str:
         meal_total_prev=meal_total_prev,
         meal_total_curr=meal_total_curr,
         meal_change=meal_change,
+        meal_avg_prev=meal_avg_prev,
+        meal_avg_curr=meal_avg_curr,
+        meal_avg_change_label=meal_avg_change_label,
         toilet_total_prev=toilet_total_prev,
         toilet_total_curr=toilet_total_curr,
         toilet_change=toilet_change,
+        toilet_avg_prev=toilet_avg_prev,
+        toilet_avg_curr=toilet_avg_curr,
+        toilet_avg_change_label=toilet_avg_change_label,
+        reference_metrics_block=reference_metrics_block,
         toilet_delta_summary=toilet_delta_summary,
         meal_breakdown_curr=meal_breakdown_curr,
         physical_prev=_safe_text(prev_week.get("physical")),

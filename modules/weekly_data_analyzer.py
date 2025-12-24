@@ -577,6 +577,16 @@ def analyze_weekly_trend(
         "previous_week": _format_attendance_summary(
             last_category_entries, attendance_prev, last_meals, last_toilet_totals
         ),
+        "per_attendance": {
+            "meal_avg_prev": meal_ratio_prev,
+            "meal_avg_curr": meal_ratio_curr,
+            "meal_avg_change_label": _change_label(meal_percent_change),
+            "meal_avg_percent": meal_percent_change,
+            "toilet_avg_prev": toilet_ratio_prev,
+            "toilet_avg_curr": toilet_ratio_curr,
+            "toilet_avg_change_label": _change_label(toilet_percent_change),
+            "toilet_avg_percent": toilet_percent_change,
+        },
         "changes": change_payload,
     }
 

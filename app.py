@@ -3,6 +3,8 @@ import pandas as pd
 import time
 import hashlib
 from datetime import datetime, timedelta
+import json
+import streamlit.components.v1 as components
 
 from modules.pdf_parser import CareRecordParser
 from modules.database import save_parsed_data
@@ -143,13 +145,44 @@ def _set_person_done(key: str, value: bool):
     st.session_state.person_completion[key] = value
 
 
-def _render_copyable_report(container, text: str):
-    """주간 AI 결과를 텍스트로 렌더링합니다."""
-    if not text:
+def _render_copyable_report(container, text: str, state_key: str):
+    """주간 AI 결과를 세션에 유지되는 텍스트로 렌더링합니다."""
+    if state_key not in st.session_state:
+        st.session_state[state_key] = text or ""
+
+    if not st.session_state.get(state_key):
         container.info("표시할 AI 결과가 없습니다.")
         return
 
-    container.text_area("AI 보고서", value=text, height=220)
+    container.text_area("AI 보고서", key=state_key, height=220)
+
+    element_id = hashlib.md5(state_key.encode("utf-8")).hexdigest()
+    js_text = json.dumps(st.session_state.get(state_key, ""))
+    components.html(
+        f"""
+        <div style="margin-top: 8px; display:flex; gap:12px; align-items:center;">
+          <button id="copy_{element_id}" style="padding:6px 12px; border-radius:6px; border:1px solid #d0d7de; background:#ffffff; cursor:pointer;">복사하기</button>
+          <span id="copy_tip_{element_id}" style="font-size:12px; color:#57606a;"></span>
+        </div>
+        <script>
+          (function() {{
+            const btn = document.getElementById('copy_{element_id}');
+            const tip = document.getElementById('copy_tip_{element_id}');
+            if (!btn || btn.dataset.bound) return;
+            btn.dataset.bound = '1';
+            btn.addEventListener('click', async () => {{
+              try {{
+                await navigator.clipboard.writeText({js_text});
+                if (tip) tip.textContent = '복사 완료';
+              }} catch (e) {{
+                if (tip) tip.textContent = '복사 실패: 브라우저 권한을 확인해주세요.';
+              }}
+            }});
+          }})();
+        </script>
+        """,
+        height=40,
+    )
 
 # --- 사이드바: 파일 업로드 및 선택 ---
 with st.sidebar:
@@ -412,17 +445,20 @@ with main_tab1:
                 ai_payload = trend.get("ai_payload")
                 if ai_payload:
                     st.divider()
-                    st.markdown("#### 🤖 AI 보고 요청")
+                    st.markdown("#### 주간 상태변화 기록지 생성")
                     ai_col, result_col = st.columns([1, 3])
                     progress_bar = ai_col.empty()
                     status_line = ai_col.empty()
                     response_area = result_col.container()
-                    if ai_col.button("AI 보고 요청"):
+                    report_state_key = f"weekly_ai_report::{customer_name}::{prev_range[0]}::{curr_range[1]}"
+                    if st.session_state.get(report_state_key):
+                        _render_copyable_report(response_area, st.session_state.get(report_state_key, ""), report_state_key)
+                    if ai_col.button("생성하기"):
                         progress_bar.progress(0)
                         status_line.text("요청 중... 0%")
                         try:
                             progress_bar.progress(15)
-                            status_line.text("AI 서비스에 연결 중... 15%")
+                            status_line.text("상태변화 기록지 생성중... 15%")
                             report = generate_weekly_report(
                                 customer_name,
                                 (prev_range[0], curr_range[1]),
@@ -434,7 +470,8 @@ with main_tab1:
                                 response_area.error(report["error"])
                             else:
                                 text_report = report if isinstance(report, str) else str(report)
-                                _render_copyable_report(response_area, text_report)
+                                st.session_state[report_state_key] = text_report
+                                _render_copyable_report(response_area, text_report, report_state_key)
                             progress_bar.progress(100)
                             status_line.text("완료: 100%")
                         except Exception as exc:
