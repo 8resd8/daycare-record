@@ -4,10 +4,10 @@ import time
 import hashlib
 from datetime import datetime, timedelta
 
-from modules.parser import CareRecordParser
-from modules.parsing_database import save_parsed_data
-from modules.ai_evaluator import AIEvaluator
-from modules.weekly_analysis import compute_weekly_status
+from modules.pdf_parser import CareRecordParser
+from modules.database import save_parsed_data
+from modules.ai_daily_validator import AIEvaluator
+from modules.weekly_data_analyzer import compute_weekly_status
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="요양기록 AI 매니저", layout="wide", page_icon="🏥")
