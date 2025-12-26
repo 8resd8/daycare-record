@@ -7,7 +7,7 @@ import json
 import streamlit.components.v1 as components
 
 from modules.pdf_parser import CareRecordParser
-from modules.database import save_parsed_data, save_weekly_status, load_weekly_status, resolve_customer_id
+from modules.database import save_parsed_data, save_weekly_status, load_weekly_status, resolve_customer_id, get_db_connection
 from modules.ai_daily_validator import AIEvaluator
 from modules.weekly_data_analyzer import compute_weekly_status
 from modules.ai_weekly_writer import generate_weekly_report
@@ -145,6 +145,163 @@ def _set_person_done(key: str, value: bool):
     st.session_state.person_completion[key] = value
 
 
+def _batch_generate_weekly_reports(person_entries):
+    """전체 인원의 주간 상태변화 기록지를 일괄 생성합니다."""
+    if not person_entries:
+        st.warning("처리할 인원이 없습니다.")
+        return
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    total = len(person_entries)
+    
+    for i, entry in enumerate(person_entries):
+        status_text.text(f"{entry['person_name']} 처리 중... ({i+1}/{total})")
+        
+        # Get person records
+        doc = next((d for d in st.session_state.docs if d["id"] == entry["doc_id"]), None)
+        if not doc:
+            continue
+            
+        person_records = [
+            r for r in doc.get("parsed_data", [])
+            if (r.get("customer_name") or "미상") == entry["person_name"]
+        ]
+        
+        if not person_records:
+            continue
+            
+        # Resolve customer_id
+        customer_id = (person_records[0].get("customer_id") if person_records else None)
+        if customer_id is None:
+            try:
+                customer_id = resolve_customer_id(
+                    name=entry["person_name"],
+                    recognition_no=(person_records[0].get("customer_recognition_no") if person_records else None),
+                    birth_date=(person_records[0].get("customer_birth_date") if person_records else None),
+                )
+            except Exception:
+                customer_id = None
+        
+        if customer_id is None:
+            continue
+        
+        # Compute weekly status
+        week_dates = sorted([r.get("date") for r in person_records if r.get("date")])
+        if not week_dates:
+            continue
+            
+        week_start = week_dates[-1]
+        result = compute_weekly_status(entry["person_name"], week_start, customer_id)
+        
+        if result.get("error") or not result.get("scores"):
+            continue
+            
+        # Generate AI report
+        prev_range, curr_range = result["ranges"]
+        ai_payload = result.get("trend", {}).get("ai_payload")
+        
+        if ai_payload:
+            try:
+                report = generate_weekly_report(
+                    entry["person_name"],
+                    (prev_range[0], curr_range[1]),
+                    ai_payload,
+                )
+                
+                if not isinstance(report, dict) or not report.get("error"):
+                    text_report = report if isinstance(report, str) else str(report)
+                    save_weekly_status(
+                        customer_id=customer_id,
+                        start_date=prev_range[0],
+                        end_date=curr_range[1],
+                        report_text=text_report,
+                    )
+            except Exception:
+                pass
+        
+        progress_bar.progress((i + 1) / total)
+    
+    status_text.text("✅ 모든 인원의 주간 상태변화 기록지 생성이 완료되었습니다.")
+    st.success("일괄 처리 완료!")
+
+
+def _batch_evaluate_all(person_entries):
+    """전체 인원의 특이사항을 일괄 평가합니다."""
+    if not person_entries:
+        st.warning("처리할 인원이 없습니다.")
+        return
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    total = len(person_entries)
+    evaluator = AIEvaluator()
+    
+    for i, entry in enumerate(person_entries):
+        status_text.text(f"{entry['person_name']} 평가 중... ({i+1}/{total})")
+        
+        # Get person records from database
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get customer_id first
+            cursor.execute(
+                "SELECT customer_id FROM customers WHERE name = %s LIMIT 1",
+                (entry["person_name"],)
+            )
+            customer_result = cursor.fetchone()
+            
+            if not customer_result:
+                continue
+                
+            customer_id = customer_result[0]
+            
+            # Get records for this customer
+            cursor.execute(
+                """
+                SELECT record_id, customer_name, date, 
+                       physical_note, cognitive_note, nursing_note, functional_note,
+                       writer_physical, writer_cognitive, writer_nursing, writer_recovery
+                FROM daily_infos 
+                WHERE customer_id = %s
+                ORDER BY date DESC
+                """,
+                (customer_id,)
+            )
+            
+            records = []
+            for row in cursor.fetchall():
+                records.append({
+                    "record_id": row[0],
+                    "customer_name": row[1],
+                    "date": row[2],
+                    "physical_note": row[3],
+                    "cognitive_note": row[4],
+                    "nursing_note": row[5],
+                    "functional_note": row[6],
+                    "writer_physical": row[7],
+                    "writer_cognitive": row[8],
+                    "writer_nursing": row[9],
+                    "writer_recovery": row[10]
+                })
+            
+            cursor.close()
+            conn.close()
+            
+            # Evaluate all records for this person
+            evaluator.evaluate_person(records)
+            
+        except Exception as e:
+            st.error(f"{entry['person_name']} 평가 중 오류: {e}")
+        
+        progress_bar.progress((i + 1) / total)
+    
+    status_text.text("✅ 모든 인원의 특이사항 평가가 완료되었습니다.")
+    st.success("일괄 평가 완료!")
+    st.rerun()
+
+
 def _render_copyable_report(container, text: str, state_key: str, widget_key: str):
     """주간 AI 결과를 세션에 유지되는 텍스트로 렌더링합니다."""
     if state_key not in st.session_state:
@@ -265,17 +422,49 @@ with st.sidebar:
             st.write("-")
 
         if active_doc and active_doc.get("parsed_data"):
-            if st.button("💾 파싱된 인원 전체 DB 저장", use_container_width=True, type="primary"):
-                with st.spinner("DB 저장 중..."):
+            # Auto-save all parsed data to DB (only once)
+            if not active_doc.get("db_saved"):
+                with st.spinner("DB 자동 저장 중..."):
                     count = save_parsed_data(active_doc["parsed_data"])
                     if count > 0:
-                        st.success(f"✅ {count}건의 기록이 저장되었습니다.")
-                        st.rerun()
-                    else:
-                        st.error("저장에 실패했습니다. 로그를 확인해주세요.")
+                        st.success(f"✅ {count}건의 기록이 자동 저장되었습니다.")
+                        # Mark as saved
+                        for doc in st.session_state.docs:
+                            if doc["id"] == active_doc["id"]:
+                                doc["db_saved"] = True
+                                break
 
-        st.subheader("👥 파싱된 인원")
+        # Batch AI Processing buttons
         person_entries = _iter_person_entries()
+        if person_entries:
+            st.divider()
+            st.markdown("#### 🤖 일괄 AI 처리")
+            
+            # Custom CSS for green text color
+            st.markdown("""
+            <style>
+            .green-text {
+                color: #00C851 !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📝 주간 상태변화 기록지 생성", 
+                           use_container_width=True, 
+                           help="전체 인원의 주간 상태변화 기록지를 일괄 생성합니다"):
+                    _batch_generate_weekly_reports(person_entries)
+            with col2:
+                if st.button("🔍 특이사항 평가 시작", 
+                           use_container_width=True,
+                           help="전체 인원의 특이사항을 일괄 평가합니다"):
+                    _batch_evaluate_all(person_entries)
+
+        st.subheader("👥 전체 인원")
+        person_entries = _iter_person_entries()
+        person_count = len(person_entries)
+        st.caption(f"총 {person_count}명")
         if not person_entries:
             st.info("파싱된 인원이 없습니다.")
         else:
@@ -562,14 +751,54 @@ with main_tab2:
             status_text = st.empty()
             total = len(person_records)
 
+            # Use the new evaluate_parsed_person method for in-memory data
+            eval_results = {}
+            
             for i, record in enumerate(person_records):
-                status_text.text(f"🔍 {record.get('date')} 기록 분석 중...")
-                result = evaluator.evaluate_daily_record(record)
-                if result:
-                    active_doc["eval_results"][record.get('date')] = result
+                date = record.get("date", "날짜 없음")
+                status_text.text(f"🔍 {date} 기록 평가 중... ({i+1}/{total})")
+                
+                # Evaluate this record
+                record_eval = {}
+                writer = record.get("writer_physical") or record.get("writer_nursing") or record.get("writer_cognitive") or record.get("writer_recovery") or ""
+                
+                categories = [
+                    ("PHYSICAL", record.get("physical_note", ""), record.get("writer_physical")),
+                    ("COGNITIVE", record.get("cognitive_note", ""), record.get("writer_cognitive")),
+                    ("NURSING", record.get("nursing_note", ""), record.get("writer_nursing")),
+                    ("RECOVERY", record.get("functional_note", ""), record.get("writer_recovery"))
+                ]
+                
+                for category, text, category_writer in categories:
+                    if text and text.strip() and text.strip() != "특이사항 없음":
+                        evaluation = evaluator._evaluate_note_only(
+                            original_text=text,
+                            customer_name=record.get("customer_name", ""),
+                            date=date,
+                            writer=category_writer or writer,
+                            category=category
+                        )
+                        if evaluation:
+                            record_eval[category.lower()] = evaluation
+                
+                if record_eval:
+                    eval_results[date] = record_eval
+                
                 progress_bar.progress((i + 1) / total)
-                time.sleep(0.05)
-
+            
+            if eval_results:
+                # Store results in active_doc
+                if "eval_results" not in active_doc:
+                    active_doc["eval_results"] = {}
+                active_doc["eval_results"].update(eval_results)
+                
+                # Update session_state
+                for doc in st.session_state.docs:
+                    if doc["id"] == active_doc["id"]:
+                        doc["eval_results"] = active_doc["eval_results"]
+                        break
+            
+            progress_bar.progress(1.0)
             status_text.text("✅ 분석 완료!")
             st.success("모든 평가가 완료되었습니다!")
             st.rerun()
