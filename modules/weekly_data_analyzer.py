@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from .database import get_db_connection
+from .database import get_db_connection, load_weekly_status
 
 POSITIVE_KEYWORDS = ["개선", "안정", "호전", "유지", "활발", "양호", "미흡하지않음"]
 NEGATIVE_KEYWORDS = ["악화", "저하", "불안", "통증", "문제", "감소", "주의", "거부", "통증"]
@@ -86,7 +86,7 @@ def _fetch_two_week_records(
         conn.close()
 
 
-def compute_weekly_status(customer_name: str, week_start_str: str) -> Dict:
+def compute_weekly_status(customer_name: str, week_start_str: str, customer_id: int) -> Dict:
     try:
         week_start = datetime.strptime(week_start_str, "%Y-%m-%d").date()
         aligned_start = week_start - timedelta(days=week_start.weekday())
@@ -139,7 +139,7 @@ def compute_weekly_status(customer_name: str, week_start_str: str) -> Dict:
             "trend": trend,
         }
 
-    trend = analyze_weekly_trend(rows, prev_range, curr_range)
+    trend = analyze_weekly_trend(rows, prev_range, curr_range, customer_id)
 
     return {
         "ranges": (prev_range, curr_range),
@@ -258,7 +258,7 @@ def _merge_notes(df: pd.DataFrame, highlight: bool = False) -> List[str]:
 
 
 def analyze_weekly_trend(
-    rows: List[Dict], prev_range: Tuple[date, date], curr_range: Tuple[date, date]
+    rows: List[Dict], prev_range: Tuple[date, date], curr_range: Tuple[date, date], customer_id: int
 ) -> Dict:
     if not rows:
         return {}
@@ -570,6 +570,17 @@ def analyze_weekly_trend(
         },
     }
 
+    # Load previous weekly report for AI reference
+    previous_weekly_report = None
+    try:
+        previous_weekly_report = load_weekly_status(
+            customer_id=customer_id,
+            start_date=prev_range[0],
+            end_date=prev_range[1],
+        )
+    except Exception:
+        previous_weekly_report = None
+
     ai_payload = {
         "current_week": _format_attendance_summary(
             this_category_entries, attendance_curr, this_meals, this_toilet_totals
@@ -588,6 +599,7 @@ def analyze_weekly_trend(
             "toilet_avg_percent": toilet_percent_change,
         },
         "changes": change_payload,
+        "previous_weekly_report": previous_weekly_report or "없음",
     }
 
     weekly_table = [

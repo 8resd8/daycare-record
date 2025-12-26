@@ -145,7 +145,7 @@ def _set_person_done(key: str, value: bool):
     st.session_state.person_completion[key] = value
 
 
-def _render_copyable_report(container, text: str, state_key: str):
+def _render_copyable_report(container, text: str, state_key: str, widget_key: str):
     """주간 AI 결과를 세션에 유지되는 텍스트로 렌더링합니다."""
     if state_key not in st.session_state:
         st.session_state[state_key] = text or ""
@@ -154,7 +154,8 @@ def _render_copyable_report(container, text: str, state_key: str):
         container.info("표시할 AI 결과가 없습니다.")
         return
 
-    container.text_area("AI 보고서", key=state_key, height=220)
+    # Use widget_key for the text_area to avoid session_state modification error
+    container.text_area("AI 보고서", key=widget_key, height=220, value=st.session_state[state_key])
 
     element_id = hashlib.md5(state_key.encode("utf-8")).hexdigest()
     js_text = json.dumps(st.session_state.get(state_key, ""))
@@ -394,7 +395,20 @@ with main_tab1:
         week_dates = sorted([r.get("date") for r in data if r.get("date")])
         if week_dates:
             week_start = week_dates[-1]
-            result = compute_weekly_status(customer_name, week_start)
+            
+            # Resolve customer_id before using it
+            customer_id = (data[0].get("customer_id") if data else None)
+            if customer_id is None:
+                try:
+                    customer_id = resolve_customer_id(
+                        name=customer_name,
+                        recognition_no=(data[0].get("customer_recognition_no") if data else None),
+                        birth_date=(data[0].get("customer_birth_date") if data else None),
+                    )
+                except Exception:
+                    customer_id = None
+            
+            result = compute_weekly_status(customer_name, week_start, customer_id)
             if result.get("error"):
                 st.error(f"주간 분석 실패: {result['error']}")
             elif not result.get("scores"):
@@ -451,19 +465,12 @@ with main_tab1:
                     status_line = ai_col.empty()
                     response_area = result_col.container()
 
-                    customer_id = None
-                    try:
-                        customer_id = resolve_customer_id(
-                            name=customer_name,
-                            recognition_no=(data[0].get("customer_recognition_no") if data else None),
-                            birth_date=(data[0].get("customer_birth_date") if data else None),
-                        )
-                    except Exception:
-                        customer_id = None
-
                     person_key = st.session_state.get("active_person_key")
                     report_identity = str(customer_id) if customer_id is not None else (person_key or customer_name)
                     report_state_key = f"weekly_ai_report::{report_identity}::{prev_range[0]}::{curr_range[1]}"
+                    # Add timestamp to widget key to ensure uniqueness
+                    import time
+                    widget_key = f"weekly_ai_report_widget::{report_identity}::{prev_range[0]}::{curr_range[1]}::{int(time.time())}"
 
                     if report_state_key not in st.session_state:
                         saved_report = None
@@ -484,6 +491,7 @@ with main_tab1:
                             response_area,
                             st.session_state.get(report_state_key, ""),
                             report_state_key,
+                            widget_key,
                         )
                     if ai_col.button("생성하기"):
                         progress_bar.progress(0)
@@ -513,7 +521,8 @@ with main_tab1:
                                         )
                                     except Exception:
                                         pass
-                                _render_copyable_report(response_area, text_report, report_state_key)
+                                # Use st.rerun() to re-render the report via the first call path
+                                st.rerun()
                             progress_bar.progress(100)
                             status_line.text("완료: 100%")
                         except Exception as exc:

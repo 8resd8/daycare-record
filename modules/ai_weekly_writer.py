@@ -102,15 +102,24 @@ def _format_input_data(name, date_range, payload) -> str:
     prev_week = _safe_dict(payload.get("previous_week"))
     curr_week = _safe_dict(payload.get("current_week"))
     changes = _safe_dict(payload.get("changes"))
+    previous_weekly_report = _safe_text(payload.get("previous_weekly_report"))
 
+    # Priority 1: Physical (신체활동 지원)
     physical_prev = _safe_text(prev_week.get("physical"))
-    cognitive_prev = _safe_text(prev_week.get("cognitive"))
-    nursing_prev = _safe_text(prev_week.get("nursing"))
-    functional_prev = _safe_text(prev_week.get("functional"))
-
     physical_curr = _safe_text(curr_week.get("physical"))
+    
+    # Priority 2: Cognitive (인지관리)
+    cognitive_prev = _safe_text(prev_week.get("cognitive"))
     cognitive_curr = _safe_text(curr_week.get("cognitive"))
+    
+    # Priority 3: Previous Weekly Evaluation (저번주 주간 상태평가) - already loaded as previous_weekly_report
+    
+    # Priority 4: Nursing (간호관리)
+    nursing_prev = _safe_text(prev_week.get("nursing"))
     nursing_curr = _safe_text(curr_week.get("nursing"))
+    
+    # Priority 5: Functional (기능회복)
+    functional_prev = _safe_text(prev_week.get("functional"))
     functional_curr = _safe_text(curr_week.get("functional"))
 
     meal_trend = _trend_label(changes.get("meal"))
@@ -145,14 +154,18 @@ def _format_input_data(name, date_range, payload) -> str:
         physical_trend=physical_trend,
         cognitive_trend=cognitive_trend,
         behavior_trend=behavior_trend,
-        physical_observation=physical_observation,
-        physical_bridge=physical_bridge,
-        physical_evidence=physical_evidence,
-        physical_intervention=physical_intervention,
-        cognitive_observation=cognitive_observation,
-        cognitive_evidence=cognitive_evidence,
-        cognitive_intervention=cognitive_intervention,
-        behavior_observation=behavior_observation,
-        behavior_evidence=behavior_evidence,
-        behavior_intervention=behavior_intervention,
+        # Priority 1: Physical
+        physical_prev=physical_prev,
+        physical_curr=physical_curr,
+        # Priority 2: Cognitive
+        cognitive_prev=cognitive_prev,
+        cognitive_curr=cognitive_curr,
+        # Priority 3: Previous Weekly Evaluation
+        previous_weekly_report=previous_weekly_report,
+        # Priority 4: Nursing
+        nursing_prev=nursing_prev,
+        nursing_curr=nursing_curr,
+        # Priority 5: Functional
+        functional_prev=functional_prev,
+        functional_curr=functional_curr,
     )

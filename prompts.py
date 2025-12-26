@@ -32,26 +32,39 @@ WEEKLY_WRITER_USER_TEMPLATE = """
 - 인지·심리 핵심 변화: {cognitive_trend}
 - 행동·안전 핵심 변화: {behavior_trend}
 
-# [문장 재료 — 반드시 이 영역을 우선 사용]
+# [문장 재료 — 우선순위 순서대로 모든 특이사항 제공]
 
-1. 신체(식사/배설/통증/위생)
-- 관찰(변화 또는 유지): {physical_observation}
-- 증거(발화/행동): {physical_evidence}
-- 개입 및 결과: {physical_intervention}
+## Priority 1: 신체활동 지원 (가장 중요)
+### 저번주 특이사항
+{physical_prev}
+### 이번주 특이사항
+{physical_curr}
 
-2. 인지·심리(기분/참여/기억)
-- 관찰(변화 또는 유지): {cognitive_observation}
-- 증거(발화/행동): {cognitive_evidence}
-- 개입 및 결과: {cognitive_intervention}
+## Priority 2: 인지관리 (두 번째로 중요)
+### 저번주 특이사항
+{cognitive_prev}
+### 이번주 특이사항
+{cognitive_curr}
 
-3. 행동·안전(낙상/거부/배회/선호)
-- 관찰(변화 또는 유지): {behavior_observation}
-- 증거(발화/행동): {behavior_evidence}
-- 개입 및 결과: {behavior_intervention}
+## Priority 3: 저번주 주간 상태평가 (참고용)
+{previous_weekly_report}
+
+## Priority 4: 간호관리
+### 저번주 특이사항
+{nursing_prev}
+### 이번주 특이사항
+{nursing_curr}
+
+## Priority 5: 기능회복
+### 저번주 특이사항
+{functional_prev}
+### 이번주 특이사항
+{functional_curr}
 
 # [작성 지시]
 - 위 1, 2, 3 순서로 정확히 3문장을 작성
 - 각 문장은 관찰→증거→개입/결과 흐름 유지
 - 문장을 자연스럽게 작성
 - 기록체 종결 유지
+- Priority 1(신체)과 2(인지)를 최우선 판단 근거로 사용할 것
 """

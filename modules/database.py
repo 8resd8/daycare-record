@@ -262,6 +262,7 @@ def save_parsed_data(records):
     try:
         for record in records:
             customer_id = get_or_create_customer(cursor, record)
+            record["customer_id"] = customer_id
             existing_id = _find_existing_record_id(cursor, customer_id, record["date"])
             if existing_id:
                 _delete_daily_record(cursor, existing_id)
