@@ -104,21 +104,21 @@ def _format_input_data(name, date_range, payload) -> str:
     changes = _safe_dict(payload.get("changes"))
     previous_weekly_report = _safe_text(payload.get("previous_weekly_report"))
 
-    # Priority 1: Physical (신체활동 지원)
+    # 우선순위 1: 신체활동 지원
     physical_prev = _safe_text(prev_week.get("physical"))
     physical_curr = _safe_text(curr_week.get("physical"))
     
-    # Priority 2: Cognitive (인지관리)
+    # 우선순위 2: 인지관리
     cognitive_prev = _safe_text(prev_week.get("cognitive"))
     cognitive_curr = _safe_text(curr_week.get("cognitive"))
     
-    # Priority 3: Previous Weekly Evaluation (저번주 주간 상태평가) - already loaded as previous_weekly_report
+    # 우선순위 3: 이전 주간 평가 (저번주 주간 상태평가) - 이미 previous_weekly_report로 로드됨
     
-    # Priority 4: Nursing (간호관리)
+    # 우선순위 4: 간호관리
     nursing_prev = _safe_text(prev_week.get("nursing"))
     nursing_curr = _safe_text(curr_week.get("nursing"))
     
-    # Priority 5: Functional (기능회복)
+    # 우선순위 5: 기능회복
     functional_prev = _safe_text(prev_week.get("functional"))
     functional_curr = _safe_text(curr_week.get("functional"))
 

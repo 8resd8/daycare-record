@@ -50,10 +50,10 @@ def _fetch_two_week_records(
     prev_end = start_date - timedelta(days=1)
     curr_end = start_date + timedelta(days=6)
 
-    # Use DailyInfoRepository to get customer records
+    # DailyInfoRepository를 사용하여 고객 레코드 가져오기
     daily_info_repo = DailyInfoRepository()
     
-    # First find the customer by name
+    # 먼저 이름으로 고객 찾기
     from modules.repositories import CustomerRepository
     customer_repo = CustomerRepository()
     customer = customer_repo.find_by_name(name)
@@ -61,14 +61,14 @@ def _fetch_two_week_records(
     if not customer:
         return [], (prev_start, prev_end), (start_date, curr_end)
     
-    # Get records for the date range
+    # 날짜 범위에 대한 레코드 가져오기
     records = daily_info_repo.get_customer_records(
         customer['customer_id'], 
         prev_start, 
         curr_end
     )
     
-    # Transform records to match expected format
+    # 예상 형식과 일치하도록 레코드 변환
     transformed_records = []
     for record in records:
         transformed_records.append({
@@ -574,7 +574,7 @@ def analyze_weekly_trend(
         },
     }
 
-    # Load previous weekly report for AI reference using repository
+    # AI 참조용 이전 주간 보고서 로드 (리포지토리 사용)
     weekly_status_repo = WeeklyStatusRepository()
     previous_weekly_report = weekly_status_repo.load_weekly_status(
         customer_id=customer_id,

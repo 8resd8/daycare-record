@@ -52,7 +52,7 @@ def process_daily_note_evaluation(record_id: int, category: str, note_text: str,
         evaluation_result = evaluate_note_with_ai(note_text, category, writer, customer_name, date)
     
     if evaluation_result:
-        # Calculate grade on server based on scores
+        # 서버에서 점수 기반 등급 계산
         consistency_score = evaluation_result.get('consistency_score', 0)
         grammar_score = evaluation_result.get('grammar_score', 0)
         specificity_score = evaluation_result.get('specificity_score', 0)
@@ -66,11 +66,11 @@ def process_daily_note_evaluation(record_id: int, category: str, note_text: str,
         else:
             korean_grade = '개선'
         
-        # Add the calculated grade to the evaluation result
+        # 계산된 등급을 평가 결과에 추가
         evaluation_result['grade_code'] = korean_grade
     else:
         korean_grade = '평가없음'
-        # Create evaluation result with 0 scores for empty or special cases
+        # 빈 값이나 특수 경우를 위한 0점 평가 결과 생성
         evaluation_result = {
             'consistency_score': 0,
             'grammar_score': 0,

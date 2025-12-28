@@ -19,7 +19,7 @@ def db_transaction(dictionary: bool = False) -> Iterator[mysql.connector.cursor.
     Usage:
         with db_transaction() as cursor:
             cursor.execute("INSERT INTO table VALUES (%s)", (value,))
-            # Automatically commits on success, rolls back on exception
+            # 성공 시 자동 커밋, 예외 발생 시 롤백
     """
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=dictionary)

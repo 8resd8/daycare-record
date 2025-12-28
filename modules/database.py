@@ -7,7 +7,7 @@ Direct SQL queries have been moved to repository classes.
 from modules.repositories import WeeklyStatusRepository, DailyInfoRepository
 
 
-# Initialize repositories
+# 리포지토리 초기화
 weekly_status_repo = WeeklyStatusRepository()
 daily_info_repo = DailyInfoRepository()
 

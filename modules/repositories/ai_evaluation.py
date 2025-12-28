@@ -10,7 +10,7 @@ class AiEvaluationRepository(BaseRepository):
     def save_evaluation(self, record_id: int, category: str, note_writer_user_id: int,
                        evaluation_result: Dict, original_text: str = None) -> None:
         """Save or update AI evaluation result."""
-        # Map English categories to Korean
+        # 영어 카테고리를 한국어로 매핑
         category_map = {
             "PHYSICAL": "신체",
             "COGNITIVE": "인지", 
@@ -24,7 +24,7 @@ class AiEvaluationRepository(BaseRepository):
             specificity_score = evaluation_result.get('specificity_score', 0)
             professionalism_score = evaluation_result.get('grammar_score', 0)
             
-            # Calculate grade based on scores
+            # 점수 기반 등급 계산
             average_score = (content_quality_score + specificity_score + professionalism_score) / 3
             
             if average_score >= 70:
@@ -37,7 +37,7 @@ class AiEvaluationRepository(BaseRepository):
             reason_text = evaluation_result.get('reasoning_process')
             suggestion_text = evaluation_result.get('suggestion_text')
         else:
-            # For "특이사항 없음" or empty notes
+            # "특이사항 없음" 또는 빈 노트의 경우
             content_quality_score = 0
             specificity_score = 0
             professionalism_score = 0
@@ -45,12 +45,12 @@ class AiEvaluationRepository(BaseRepository):
             reason_text = ''
             suggestion_text = ''
         
-        # Check if evaluation exists
+        # 평가가 존재하는지 확인
         check_query = 'SELECT ai_eval_id FROM ai_evaluations WHERE record_id = %s AND category = %s'
         existing = self._execute_query_one(check_query, (record_id, korean_category))
         
         if existing:
-            # Update existing evaluation
+            # 기존 평가 업데이트
             update_query = '''
                 UPDATE ai_evaluations SET
                     consistency_score = %s,
@@ -70,7 +70,7 @@ class AiEvaluationRepository(BaseRepository):
                 note_writer_user_id, record_id, korean_category
             ))
         else:
-            # Insert new evaluation
+            # 새 평가 삽입
             insert_query = '''
                 INSERT INTO ai_evaluations (
                     record_id, category, consistency_score, grammar_score,
@@ -175,7 +175,7 @@ class AiEvaluationRepository(BaseRepository):
         
         results = self._execute_query(query, tuple(params))
         
-        # Format results
+        # 결과 포맷팅
         stats = {}
         for row in results:
             stats[row['category']] = {

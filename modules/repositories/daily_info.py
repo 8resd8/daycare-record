@@ -22,7 +22,7 @@ class DailyInfoRepository(BaseRepository):
         if not record_id:
             return
         
-        # Delete in order of dependencies
+        # 의존성 순서대로 삭제
         queries = [
             "DELETE FROM daily_physicals WHERE record_id=%s",
             "DELETE FROM daily_cognitives WHERE record_id=%s", 
@@ -56,10 +56,10 @@ class DailyInfoRepository(BaseRepository):
     def replace_daily_physicals(self, record_id: int, record: Dict) -> None:
         """Replace daily physicals record for a record_id."""
         with db_transaction() as cursor:
-            # Delete existing
+            # 기존 데이터 삭제
             cursor.execute("DELETE FROM daily_physicals WHERE record_id=%s", (record_id,))
             
-            # Insert new
+            # 새 데이터 삽입
             cursor.execute("""
                 INSERT INTO daily_physicals (
                     record_id, hygiene_care, bath_time, bath_method,
@@ -83,10 +83,10 @@ class DailyInfoRepository(BaseRepository):
     def replace_daily_cognitives(self, record_id: int, record: Dict) -> None:
         """Replace daily cognitives record for a record_id."""
         with db_transaction() as cursor:
-            # Delete existing
+            # 기존 데이터 삭제
             cursor.execute("DELETE FROM daily_cognitives WHERE record_id=%s", (record_id,))
             
-            # Insert new
+            # 새 데이터 삽입
             cursor.execute("""
                 INSERT INTO daily_cognitives (
                     record_id, cog_support, comm_support, note, writer_name
@@ -102,10 +102,10 @@ class DailyInfoRepository(BaseRepository):
     def replace_daily_nursings(self, record_id: int, record: Dict) -> None:
         """Replace daily nursings record for a record_id."""
         with db_transaction() as cursor:
-            # Delete existing
+            # 기존 데이터 삭제
             cursor.execute("DELETE FROM daily_nursings WHERE record_id=%s", (record_id,))
             
-            # Insert new
+            # 새 데이터 삽입
             cursor.execute("""
                 INSERT INTO daily_nursings (
                     record_id, bp_temp, health_manage, nursing_manage,
@@ -124,10 +124,10 @@ class DailyInfoRepository(BaseRepository):
     def replace_daily_recoveries(self, record_id: int, record: Dict) -> None:
         """Replace daily recoveries record for a record_id."""
         with db_transaction() as cursor:
-            # Delete existing
+            # 기존 데이터 삭제
             cursor.execute("DELETE FROM daily_recoveries WHERE record_id=%s", (record_id,))
             
-            # Insert new
+            # 새 데이터 삽입
             cursor.execute("""
                 INSERT INTO daily_recoveries (
                     record_id, prog_basic, prog_activity, prog_cognitive,
@@ -150,13 +150,13 @@ class DailyInfoRepository(BaseRepository):
         
         with db_transaction() as cursor:
             for record in records:
-                # Get or create customer
+                # 고객 확인 또는 생성
                 customer_id = self._get_or_create_customer_in_transaction(
                     cursor, record
                 )
                 record["customer_id"] = customer_id
                 
-                # Check for existing record
+                # 기존 레코드 확인
                 cursor.execute(
                     "SELECT record_id FROM daily_infos WHERE customer_id=%s AND date=%s",
                     (customer_id, record["date"])
@@ -166,7 +166,7 @@ class DailyInfoRepository(BaseRepository):
                 if existing:
                     self._delete_daily_record_in_transaction(cursor, existing[0])
                 
-                # Insert new record
+                # 새 레코드 삽입
                 cursor.execute("""
                     INSERT INTO daily_infos (
                         customer_id, date, start_time, end_time,
@@ -181,7 +181,7 @@ class DailyInfoRepository(BaseRepository):
                 ))
                 record_id = cursor.lastrowid
                 
-                # Insert child records
+                # 하위 레코드들 삽입
                 self._insert_physicals_in_transaction(cursor, record_id, record)
                 self._insert_cognitives_in_transaction(cursor, record_id, record)
                 self._insert_nursings_in_transaction(cursor, record_id, record)
@@ -228,7 +228,7 @@ class DailyInfoRepository(BaseRepository):
         result = self._execute_query_one(query, (customer_id, date))
         return result['record_id'] if result else None
     
-    # Private helper methods for transaction handling
+    # 트랜잭션 처리를 위한 비공개 헬퍼 메서드들
     def _get_or_create_customer_in_transaction(self, cursor, record: Dict) -> int:
         """Get or create customer within an existing transaction."""
         name = record.get("customer_name")
