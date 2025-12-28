@@ -1,25 +1,18 @@
 from __future__ import annotations
 
-import openai
 import streamlit as st
 
 from weekly_prompt import WEEKLY_WRITER_SYSTEM_PROMPT, WEEKLY_WRITER_USER_TEMPLATE
-
-
-def _get_openai_client() -> openai.OpenAI:
-    api_key = st.secrets.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OpenAI API 키가 설정되어 있지 않습니다.")
-    return openai.OpenAI(api_key=api_key)
+from modules.ai_client import get_ai_client
 
 
 def generate_weekly_report(customer_name, date_range, analysis_payload):
     input_content = _format_input_data(customer_name, date_range, analysis_payload)
 
     try:
-        client = _get_openai_client()
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+        ai_client = get_ai_client()
+        response = ai_client.chat_completion(
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": WEEKLY_WRITER_SYSTEM_PROMPT},
                 {"role": "user", "content": input_content},

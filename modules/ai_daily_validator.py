@@ -1,8 +1,8 @@
 import streamlit as st
-from openai import OpenAI
 import json
 from daily_prompt import get_evaluation_prompt
 from modules.repositories import AiEvaluationRepository
+from modules.ai_client import get_ai_client
 
 
 # Initialize repository
@@ -14,15 +14,15 @@ def evaluate_note_with_ai(note_text: str, category: str = '', writer: str = '', 
         return None
     
     try:
-        client = OpenAI(api_key=st.secrets['OPENAI_API_KEY'])
+        ai_client = get_ai_client()
     except Exception as e:
-        print(f'OpenAI 클라이언트 초기화 오류: {e}')
+        print(f'AI 클라이언트 초기화 오류: {e}')
         return None
     
     system_prompt, user_prompt = get_evaluation_prompt(note_text, category, writer, customer_name, date)
     
     try:
-        response = client.chat.completions.create(
+        response = ai_client.chat_completion(
             model='gpt-4o-mini',
             messages=[
                 {'role': 'system', 'content': system_prompt},
