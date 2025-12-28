@@ -78,13 +78,13 @@ def _fetch_two_week_records(
             'cognitive_note': record['cognitive_note'],
             'nursing_note': record['nursing_note'],
             'functional_note': record['functional_note'],
-            'meal_breakfast': None,  # These would need to be added to the repo query if needed
-            'meal_lunch': None,
-            'meal_dinner': None,
-            'toilet_care': None,
-            'bath_time': None,
-            'bp_temp': None,
-            'prog_therapy': None
+            'meal_breakfast': record.get('meal_breakfast'),
+            'meal_lunch': record.get('meal_lunch'),
+            'meal_dinner': record.get('meal_dinner'),
+            'toilet_care': record.get('toilet_care'),
+            'bath_time': record.get('bath_time'),
+            'bp_temp': record.get('bp_temp'),
+            'prog_therapy': record.get('prog_therapy')
         })
     
     return transformed_records, (prev_start, prev_end), (start_date, curr_end)

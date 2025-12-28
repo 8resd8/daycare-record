@@ -197,6 +197,10 @@ class DailyInfoRepository(BaseRepository):
             SELECT 
                 di.record_id, di.date, di.total_service_time,
                 dp.note AS physical_note, dp.writer_name AS writer_physical,
+                dp.meal_breakfast, dp.meal_lunch, dp.meal_dinner,
+                dp.toilet_care, dp.bath_time,
+                dn.bp_temp,
+                dr.prog_therapy,
                 dc.note AS cognitive_note, dc.writer_name AS writer_cognitive,
                 dn.note AS nursing_note, dn.writer_name AS writer_nursing,
                 dr.note AS functional_note, dr.writer_name AS writer_recovery
