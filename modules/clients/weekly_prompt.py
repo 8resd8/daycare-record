@@ -41,6 +41,12 @@ WEEKLY_WRITER_USER_TEMPLATE = """
         <name>{name}</name>
         <period>{start_date} ~ {end_date}</period>
     </subject_info>
+    
+    <text_normalization_rule>
+    - 입력 데이터(raw_materials)는 PDF 파싱 과정에서 띄어쓰기 노이즈(예: "웃 음치료", "하 시도 록")가 포함되어 있을 수 있음.
+    - 당신은 전문 사회복지사로서 문맥을 파악하여 이러한 오타를 올바른 단어로 교정하여 인식해야 함.
+    - 출력물에는 절대 이러한 파싱 노이즈가 포함되어서는 안 됨.
+    </text_normalization_rule>
 
     <raw_materials>
         <priority_1_physical>
