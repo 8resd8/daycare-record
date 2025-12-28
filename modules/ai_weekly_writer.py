@@ -113,39 +113,22 @@ def _format_input_data(name, date_range, payload) -> str:
     cognitive_curr = _safe_text(curr_week.get("cognitive"))
     
     # 우선순위 3: 이전 주간 평가 (저번주 주간 상태평가) - 이미 previous_weekly_report로 로드됨
-    
-    # 우선순위 4: 간호관리
-    nursing_prev = _safe_text(prev_week.get("nursing"))
-    nursing_curr = _safe_text(curr_week.get("nursing"))
-    
-    # 우선순위 5: 기능회복
-    functional_prev = _safe_text(prev_week.get("functional"))
-    functional_curr = _safe_text(curr_week.get("functional"))
 
     meal_trend = _trend_label(changes.get("meal"))
     toilet_trend = _trend_label(changes.get("toilet"))
     physical_trend = meal_trend if meal_trend != "유지" else toilet_trend
     cognitive_trend = _notes_trend(cognitive_prev, cognitive_curr)
-    behavior_trend = _notes_trend(functional_prev, functional_curr)
 
     physical_observation, physical_evidence, _ = _compose_oer(
         physical_curr,
         _build_physical_change_observation(meal_trend, toilet_trend),
     )
     physical_bridge = _pick_line(physical_prev, 0)
-    physical_intervention = _pick_line(nursing_curr, 0)
 
     cognitive_observation, cognitive_evidence, _ = _compose_oer(
         cognitive_curr,
         "지난주 대비 인지·심리 상태의 변화 여부를 관찰하였음",
     )
-    cognitive_intervention = _pick_line(nursing_curr, 1)
-
-    behavior_observation, behavior_evidence, _ = _compose_oer(
-        functional_curr,
-        "지난주 대비 행동·안전 상태의 변화 여부를 관찰하였음",
-    )
-    behavior_intervention = _pick_line(nursing_curr, 2)
     
     return WEEKLY_WRITER_USER_TEMPLATE.format(
         name=name,
