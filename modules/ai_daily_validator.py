@@ -1,7 +1,7 @@
 """AI 일일 평가 모듈 - 서비스 레이어 위임"""
 
 # 서비스 레이어로 위임하기 위한 하위 호환성 래퍼
-from modules.services.daily_evaluation_service import evaluation_service
+from modules.services.daily_report_service import evaluation_service
 
 # 이전 API와의 호환성을 위한 함수들
 def evaluate_note_with_ai(note_text: str, category: str = '', writer: str = '', customer_name: str = '', date: str = ''):
