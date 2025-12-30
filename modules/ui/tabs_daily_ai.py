@@ -2,10 +2,12 @@
 
 import streamlit as st
 import pandas as pd
+from datetime import datetime, timedelta
 from modules.db_connection import db_query
 from modules.customers import resolve_customer_id
 from modules.services.daily_report_service import evaluation_service
 from modules.ui.ui_helpers import get_active_doc, get_active_person_records
+from modules.repositories.ai_evaluation import AiEvaluationRepository
 
 
 def render_ai_evaluation_tab():
@@ -20,7 +22,10 @@ def render_ai_evaluation_tab():
     else:
         st.markdown(f"### 📊 기록 품질 전수 조사 - {person_name or active_doc['name']}")
 
-        grade_filter = st.selectbox(
+        st.divider()
+        st.write("### 📝 새로운 평가 실행")
+
+        grade_filter_new = st.selectbox(
             "등급 필터",
             options=["개선", "우수", "평균", "평가없음", "전체"],
             index=0,
@@ -120,90 +125,121 @@ def render_ai_evaluation_tab():
             
             st.rerun()
 
-        if active_doc.get("eval_results"):
-            st.divider()
-            st.write("### 📝 AI 분석 리포트")
+        # AI 분석 리포트 섹션 - 평가 시작 전 원본 텍스트만 표시
+        st.divider()
+        st.write("### 📝 AI 분석 리포트")
 
-            eval_tabs = st.tabs(["신체활동", "인지관리", "간호관리", "기능회복"])
+        eval_tabs = st.tabs(["신체활동", "인지관리", "간호관리", "기능회복"])
 
-            def show_eval_df(category_key, note_key, writer_key):
-                def _pick_item(res, key):
-                    if not res:
-                        return {}
-                    if key in res and isinstance(res.get(key), dict):
-                        return res.get(key) or {}
-                    alt_keys = {
-                        "cognitive": ["cognition", "cognitve", "인지", "인지관리"],
-                        "physical": ["phys", "신체", "신체활동"],
-                        "nursing": ["nurse", "간호", "간호관리"],
-                        "recovery": ["rehab", "functional", "기능", "기능회복"],
-                    }
-                    for k in alt_keys.get(key, []):
-                        if k in res and isinstance(res.get(k), dict):
-                            return res.get(k) or {}
-                    return {}
-
-                rows = []
-                for eval_key, res in active_doc["eval_results"].items():
-                    # Parse person_name::date format
-                    if "::" in eval_key:
-                        _, date = eval_key.split("::", 1)
-                    else:
-                        date = eval_key  # Fallback for old format
-
-                    item = _pick_item(res or {}, category_key)
-                    original_record = next((r for r in person_records if r["date"] == date), {})
-
-                    grade = item.get("grade_code", "-")
-                    # Convert English grade_code to Korean display
-                    grade_map = {
-                        "EXCELLENT": "우수",
-                        "NORMAL": "평균",
-                        "IMPROVE": "개선",
-                        "NONE": "평가없음"
-                    }
-                    # Handle both English and Korean inputs
-                    if grade in grade_map:
-                        grade_display = grade_map[grade]
-                    else:
-                        grade_display = grade if grade != "-" else "-"
-
-                    if grade_filter != "전체" and grade_display != grade_filter:
-                        continue
-
-                    reason = item.get("reasoning_process", "")
-
-                    original_text = original_record.get(note_key, "")
-                    if not original_text:
-                        original_text = item.get("original_sentence", "")
-
+        def show_original_df(category_key, note_key, writer_key):
+            """평가 시작 전 원본 텍스트만 표시하는 함수"""
+            rows = []
+            for record in person_records:
+                date = record.get("date", "")
+                note_text = record.get(note_key, "")
+                writer = record.get(writer_key, "")
+                
+                if note_text and note_text.strip() not in ['특이사항 없음', '결석', '']:
                     rows.append({
                         "날짜": date,
-                        "등급": grade_display,
-                        "수정 제안": item.get("suggestion_text", ""),
-                        "원본 내용": original_text,
-                        "이유": reason,
-                        "작성자": original_record.get(writer_key, "")
+                        "작성자": writer,
+                        "원본 내용": note_text,
+                        "수정 제안": "",
+                        "이유": ""
                     })
+            
+            if rows:
                 df = pd.DataFrame(rows)
-                if df.empty:
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("해당 카테고리의 기록이 없습니다.")
+
+        def show_eval_df(category_key, note_key, writer_key):
+            """평가 완료 후 결과를 표시하는 함수"""
+            def _pick_item(res, key):
+                if not res:
+                    return {}
+                if key in res and isinstance(res.get(key), dict):
+                    return res.get(key) or {}
+                alt_keys = {
+                    "cognitive": ["cognition", "cognitve", "인지", "인지관리"],
+                    "physical": ["phys", "신체", "신체활동"],
+                    "nursing": ["nurse", "간호", "간호관리"],
+                    "recovery": ["rehab", "functional", "기능", "기능회복"],
+                }
+                for k in alt_keys.get(key, []):
+                    if k in res and isinstance(res.get(k), dict):
+                        return res.get(k) or {}
+                return {}
+
+            rows = []
+            for eval_key, res in active_doc["eval_results"].items():
+                # Parse person_name::date format
+                if "::" in eval_key:
+                    _, date = eval_key.split("::", 1)
                 else:
-                    def _row_style(row):
-                        if row["등급"] == "개선":
-                            return ["color: green; font-weight: 600;"] * len(row)
-                        return ["" for _ in row]
+                    date = eval_key  # Fallback for old format
 
-                    def _grade_style(val):
-                        if val == "개선":
-                            return "color: green; font-weight: 600;"
-                        if val == "우수":
-                            return "color: blue; font-weight: 600;"
-                        return ""
-                    styled = df.style.apply(_row_style, axis=1).map(_grade_style, subset=["등급"])
-                    st.dataframe(styled, use_container_width=True, hide_index=True)
+                item = _pick_item(res or {}, category_key)
+                original_record = next((r for r in person_records if r["date"] == date), {})
 
+                grade = item.get("grade_code", "-")
+                # Convert English grade_code to Korean display
+                grade_map = {
+                    "EXCELLENT": "우수",
+                    "NORMAL": "평균",
+                    "IMPROVE": "개선",
+                    "NONE": "평가없음"
+                }
+                # Handle both English and Korean inputs
+                if grade in grade_map:
+                    grade_display = grade_map[grade]
+                else:
+                    grade_display = grade if grade != "-" else "-"
+
+                if grade_filter != "전체" and grade_display != grade_filter:
+                    continue
+
+                reason = item.get("reasoning_process", "")
+
+                original_text = original_record.get(note_key, "")
+                if not original_text:
+                    original_text = item.get("original_sentence", "")
+
+                rows.append({
+                    "날짜": date,
+                    "등급": grade_display,
+                    "수정 제안": item.get("suggestion_text", ""),
+                    "원본 내용": original_text,
+                    "이유": reason,
+                    "작성자": original_record.get(writer_key, "")
+                })
+            df = pd.DataFrame(rows)
+            if df.empty:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                def _row_style(row):
+                    if row["등급"] == "개선":
+                        return ["color: green; font-weight: 600;"] * len(row)
+                    return ["" for _ in row]
+
+                def _grade_style(val):
+                    if val == "개선":
+                        return "color: green; font-weight: 600;"
+                    if val == "우수":
+                        return "color: blue; font-weight: 600;"
+                    return ""
+                styled = df.style.apply(_row_style, axis=1).map(_grade_style, subset=["등급"])
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+
+        # 평가 결과가 있으면 평가 결과를, 없으면 원본 텍스트만 표시
+        if active_doc.get("eval_results"):
             with eval_tabs[0]: show_eval_df("physical", "physical_note", "writer_phy")
             with eval_tabs[1]: show_eval_df("cognitive", "cognitive_note", "writer_cog")
             with eval_tabs[2]: show_eval_df("nursing", "nursing_note", "writer_nur")
             with eval_tabs[3]: show_eval_df("recovery", "functional_note", "writer_func")
+        else:
+            with eval_tabs[0]: show_original_df("physical", "physical_note", "writer_phy")
+            with eval_tabs[1]: show_original_df("cognitive", "cognitive_note", "writer_cog")
+            with eval_tabs[2]: show_original_df("nursing", "nursing_note", "writer_nur")
+            with eval_tabs[3]: show_original_df("recovery", "functional_note", "writer_func")
