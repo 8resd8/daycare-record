@@ -1,13 +1,12 @@
 """AI 품질 평가 탭 UI 모듈"""
 
-import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-from modules.db_connection import db_query
+import streamlit as st
+
 from modules.customers import resolve_customer_id
+from modules.db_connection import db_query
 from modules.services.daily_report_service import evaluation_service
 from modules.ui.ui_helpers import get_active_doc, get_active_person_records
-from modules.repositories.ai_evaluation import AiEvaluationRepository
 
 
 def render_ai_evaluation_tab():
@@ -20,10 +19,10 @@ def render_ai_evaluation_tab():
     elif not person_records:
         st.warning("분석할 데이터가 없습니다.")
     else:
-        st.markdown(f"### 📊 기록 품질 전수 조사 - {person_name or active_doc['name']}")
+        st.markdown(f"### 장기요양급여 기록지 - {person_name or active_doc['name']}")
 
         # 필수 항목 체크 섹션
-        st.divider()
+        # st.divider()
         
         def check_required_items(records):
             """필수 항목 체크 함수"""
@@ -47,7 +46,9 @@ def render_ai_evaluation_tab():
                         hour_min = end_time.split(":")
                         if len(hour_min) >= 2:
                             hour = int(hour_min[0])
-                            is_afternoon = hour >= 15
+                            minute = int(hour_min[1])
+                            # 17시 10분 이후이면 저녁 체크
+                            is_afternoon = (hour > 17) or (hour == 17 and minute >= 10)
                     except:
                         pass
                 
@@ -177,25 +178,29 @@ def render_ai_evaluation_tab():
                 
                 percentage = (total_completed / total_required) * 100
                 return percentage, total_completed, total_required
-            
+
             # 작성률 표시
             st.write("#### 카테고리별 작성률")
             categories_korean = ["기본정보", "신체활동지원", "인지관리", "건강및간호관리", "기능회복훈련"]
             categories = ["기본정보", "신체활동지원", "인지관리", "건강및간호관리", "기능회복훈련"]
-            
+
             rate_cols = st.columns(5)
             for idx, (col, cat_ko, cat) in enumerate(zip(rate_cols, categories_korean, categories)):
                 percentage, completed, total = calculate_completion_rate(check_results, cat)
                 with col:
-                    st.metric(
-                        label=cat_ko,
-                        value=f"{percentage:.1f}%",
-                        delta=f"{completed}/{total}"
-                    )
-            
+                    # 100%가 아닐 때 주황색으로 표시
+                    if percentage < 100:
+                        st.markdown(f"<p style='color: gray; text-align: center; margin-bottom: 0px;'>{cat_ko}</p>", unsafe_allow_html=True)
+                        st.markdown(f"<h3 style='color: orange; text-align: center; margin: 0px;'>{percentage:.1f}%</h3>", unsafe_allow_html=True)
+                        st.markdown(f"<p style='color: gray; text-align: center; margin: 0px; font-size: 20px;'>{completed}/{total}</p>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"<p style='color: gray; text-align: center; margin-bottom: 0px;'>{cat_ko}</p>", unsafe_allow_html=True)
+                        st.markdown(f"<h3 style='color: black; text-align: center; margin: 0px;'>{percentage:.1f}%</h3>", unsafe_allow_html=True)
+                        st.markdown(f"<p style='color: gray; text-align: center; margin: 0px; font-size: 20px;'>{completed}/{total}</p>", unsafe_allow_html=True)
+
             # 카테고리별 탭으로 표시
             category_tabs = st.tabs(categories_korean)
-            
+
             for idx, category in enumerate(categories):
                 with category_tabs[idx]:
                     # 테이블 생성
@@ -204,6 +209,22 @@ def render_ai_evaluation_tab():
                         checks = result[category]
                         row = {"날짜": checks.get("날짜", "")}
                         
+                        # 작성자 정보 추가
+                        original_record = next((r for r in person_records if r["date"] == checks.get("날짜", "")), {})
+                        
+                        if category == "기본정보":
+                            writers = [original_record.get("writer_phy"), original_record.get("writer_nur"), 
+                                      original_record.get("writer_cog"), original_record.get("writer_func")]
+                            row["작성자"] = next((w for w in writers if w), "")
+                        elif category == "신체활동지원":
+                            row["작성자"] = original_record.get("writer_phy") or ""
+                        elif category == "인지관리":
+                            row["작성자"] = original_record.get("writer_cog") or ""
+                        elif category == "건강및간호관리":
+                            row["작성자"] = original_record.get("writer_nur") or ""
+                        elif category == "기능회복훈련":
+                            row["작성자"] = original_record.get("writer_func") or ""
+
                         for key, value in checks.items():
                             if key != "날짜":
                                 if value is None:
@@ -212,9 +233,9 @@ def render_ai_evaluation_tab():
                                     row[key] = "✅"
                                 else:
                                     row[key] = "❌"
-                        
+
                         table_data.append(row)
-                    
+
                     if table_data:
                         df = pd.DataFrame(table_data)
                         st.dataframe(df, use_container_width=True, hide_index=True)
