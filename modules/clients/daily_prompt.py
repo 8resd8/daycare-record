@@ -1,77 +1,128 @@
 SYSTEM_PROMPT = """
 <system_instruction>
-    <role>당신은 요양기관 기록을 간결하고 전문적으로 작성하는 사회복지사입니다.</role>
+    <role>당신은 요양기관의 일일 데이터를 분석하여 공단 평가 기준에 부합하는 전문적인 OER(관찰-개입-반응) 기록을 생성하는 10년 차 수석 사회복지사입니다.</role>
     
     <task>
-        제공된 데이터를 바탕으로 공백 포함 80자 이내의 완벽한 OER(관찰-개입-반응) 문장을 작성하십시오.
+        제공된 데이터를 바탕으로 공백 포함 80~100자 이내의 전문 기록을 JSON 형식으로 작성하십시오.
     </task>
 
+    <writing_principles>
+        1. 데이터 기반 논리적 추론(Logical Inference): 
+           - <program_details>에 적힌 활동명(예: 재난대응훈련)을 문장의 핵심 소재로 삼으십시오.
+           - 데이터가 '완료' 상태라면, 그 과정에서 발생했을 법한 표준적인 사회복지적 개입과 어르신의 구체적 행동을 논리적으로 구성하십시오.
+        2. 객관적 관찰 중심(Observable Behavior):
+           - "기분이 좋음", "인지가 좋아짐"과 같은 주관적 판단은 배제하십시오.
+           - 대신 "밝게 미소 지으심", "지시에 따라 대피 경로로 이동함", "워크북의 과제를 끝까지 완수함" 등 눈에 보이는 행동으로 서술하십시오.
+        3. OER 구조의 정교화:
+           - [관찰(O): 상태/상황] + [개입(E): 도움/지원] + [반응(R): 관찰된 행동 결과]가 유기적으로 연결되어야 합니다.
+    </writing_principles>
+
     <output_constraints>
-        <length_and_structure>
-            - 가장 중요한 데이터 1~2개에 집중
-            - 문장 구성: 입력 데이터가 한 문장이거나 내용이 너무 짧은 경우, 반드시 문맥에 맞는 보충 문장을 하나 더 생성하여 총 2문장 내외로 만드십시오.
-        </length_and_structure>
-        <ending_style>
-            - 반드시 명사형 종결 어미(~함, ~하심, ~함)를 사용하십시오.
-            - "~하였습니다", "~했습니다" 등 경어체는 절대 금지입니다.
-        </ending_style>
-        <content_focus>
-            - 단순 나열이 아닌 '어르신의 특정 행동(O) -> 복지사의 전문 개입(E) -> 긍정적 반응(R)'이 한 흐름에 나타나게 하십시오.
-        </content_focus>
-        <forbidden_words>수급자 이름, 숫자(0-9), 수치(%, 회), 출석, 평균</forbidden_words>
+        - 길이: 공백 포함 80~100자 이내.
+        - 어미: 반드시 명사형 종결 어미(~함, ~하심, ~보이심, ~있음) 사용.
+        - 금지어: 수급자 이름, 숫자, 완료함, 실시함, 진행함, 잘함, 양호함(추상적 단어).
     </output_constraints>
 
     <writing_examples>
         <example>
-            - 실내 보행 시 워커 이용하여 안전하게 이동함. 보행 중 어지럼증 호소 없었음.
-            - 소변 색이 평소보다 진하고 냄새가 강함.
-            - 단어 선택을 어려워하시며 '그거, 저거' 라는 표현만 반복함. 호응하며 경청해드렸으나 대화를 이어 나가기 힘들어하심.
-            - 고향에 가고 싶다며 위축된 모습 보이셔서, 옆에 앉아 고향에서의 추억에 대해 이야기를 들어드리고 공감해 드리자 점차 표정이 밝아 지심.
+            - 입력: 재난상황 대응훈련 완료
+            - 출력: 화재 대피 훈련 시 비상구 위치를 상세히 안내해 드리자 당황하지 않고 지시에 따라 낮은 자세를 유지하며 안전하게 대피 경로로 이동하심. (82자)
+        </example>
+        <example>
+            - 입력: 두뇌튼튼교실 워크북 완료
+            - 출력: 워크북의 관찰 집중력 과제를 수행하실 때 인지적 자극을 위해 옆에서 문항을 천천히 읽어 드리니 높은 집중력을 발휘하며 모든 문항을 완수하심. (85자)
         </example>
     </writing_examples>
 
     <output_format>
     오직 아래의 JSON 구조로만 답변하십시오.
     {
-        "physical": { "corrected_note": "OER 문장", "reason": "교정 근거" },
-        "cognitive": { "corrected_note": "OER 문장", "reason": "교정 근거" }
+        "physical_candidates": [
+            { "corrected_note": "후보1", "reason": "근거1" },
+            { "corrected_note": "후보2", "reason": "근거2" },
+            { "corrected_note": "후보3", "reason": "근거3" }
+        ],
+        "cognitive_candidates": [
+            { "corrected_note": "후보1", "reason": "근거1" },
+            { "corrected_note": "후보2", "reason": "근거2" },
+            { "corrected_note": "후보3", "reason": "근거3" }
+        ]
     }
     </output_format>
 </system_instruction>
 """
 
 
-def get_special_note_prompt(physical_note: str, cognitive_note: str, 
-                          customer_name: str, date: str) -> tuple[str, str]:
+def get_special_note_prompt(record: dict) -> tuple[str, str]:
     user_prompt = f"""
-<records>
-    <customer_name>{customer_name}</customer_name>
-    <date>{date}</date>
+<daily_activity_record>
+    <customer_name>{record.get('customer_name', '')}</customer_name>
+    <date>{record.get('date', '')}</date>
     
-    <physical_activity>
-        <category>신체활동및지원</category>
-        <items>
-            <item>청결</item>
-            <item>점심</item>
-            <item>저녁</item>
-            <item>화장실 이용</item>
-            <item>이동도움</item>
-        </items>
-        <special_note>
-            {physical_note if physical_note else "특이사항 없음"}
-        </special_note>
-    </physical_activity>
+    <physical_activity_support>
+        <hygiene_care>
+            <face_washing>{record.get('hygiene_care', '')}</face_washing>
+            <oral_care>{record.get('oral_care', '')}</oral_care>
+            <hair_care>{record.get('hair_care', '')}</hair_care>
+            <body_care>{record.get('body_care', '')}</body_care>
+            <changing_clothes>{record.get('changing_clothes', '')}</changing_clothes>
+        </hygiene_care>
+        
+        <meals>
+            <lunch>{record.get('meal_lunch', '')}</lunch>
+            <dinner>{record.get('meal_dinner', '')}</dinner>
+        </meals>
+        
+        <toilet_usage>
+            <usage_count>{record.get('toilet_care', '')}</usage_count>
+        </toilet_usage>
+        
+        <mobility_support>
+            <assistance_provided>{record.get('mobility_care', '')}</assistance_provided>
+            <physical_function_enhancement>{record.get('physical_function', '')}</physical_function_enhancement>
+        </mobility_support>
+    </physical_activity_support>
     
-    <cognitive_care>
-        <category>인지관리및의사소통</category>
-        <items>
-            <item>인지관리 지원</item>
-            <item>의사소통 도움</item>
-        </items>
-        <special_note>
-            {cognitive_note if cognitive_note else "특이사항 없음"}
-        </special_note>
-    </cognitive_care>
-</records>
+    <cognitive_management_communication>
+        <cognitive_support>
+            <support_provided>{record.get('cog_support', '')}</support_provided>
+        </cognitive_support>
+        
+        <communication_support>
+            <assistance_provided>{record.get('comm_support', '')}</assistance_provided>
+        </communication_support>
+    </cognitive_management_communication>
+    
+    <health_nursing_care>
+        <vital_signs>
+            <blood_pressure_temperature>{record.get('bp_temp', '')}</blood_pressure_temperature>
+        </vital_signs>
+        
+        <health_management>
+            <care_provided>{record.get('health_manage', '')}</care_provided>
+        </health_management>
+    </health_nursing_care>
+    
+    <functional_recovery_training>
+        <physical_cognitive_program>
+            <program_details>{record.get('prog_enhance_detail', '')}</program_details>
+        </physical_cognitive_program>
+        
+        <basic_adl_training>
+            <training_provided>{record.get('prog_basic', '')}</training_provided>
+        </basic_adl_training>
+        
+        <cognitive_activity_program>
+            <program_status>{record.get('prog_activity', '')}</program_status>
+        </cognitive_activity_program>
+        
+        <cognitive_function_training>
+            <training_status>{record.get('prog_cognitive', '')}</training_status>
+        </cognitive_function_training>
+    </functional_recovery_training>
+</daily_activity_record>
+
+위 데이터를 바탕으로 [신체활동지원]과 [인지관리및의사소통]의 특이사항을 작성하십시오.
+실제 활동 내용과 어르신의 반응을 구체적으로 묘사해 주십시오.
 """
     return SYSTEM_PROMPT, user_prompt
