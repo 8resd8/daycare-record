@@ -22,6 +22,14 @@ def render_ai_evaluation_tab():
         st.warning("분석할 데이터가 없습니다.")
     else:
         st.markdown(f"### 장기요양급여 기록지 - {person_name or active_doc['name']}")
+        
+        # 데이터 파싱 상태 확인 섹션
+        with st.expander("📊 데이터 파싱 상태 확인", expanded=False):
+            st.write("**현재 파싱된 데이터 샘플:**")
+            for i, record in enumerate(person_records[:3]):  # 처음 3개만 표시
+                st.write(f"📅 {record.get('date', '날짜 없음')}")
+                st.code(f"프로그램 상세: {record.get('prog_enhance_detail', '')}")
+            st.info("💡 만약 날짜에 다른 프로그램 내용이 보이거나 데이터가 고정돼 있다면 PDF를 다시 업로드해주세요.")
 
         # 필수 항목 체크 섹션
         # st.divider()
@@ -329,27 +337,29 @@ def render_ai_evaluation_tab():
             # 평가 결과 저장용 딕셔너리
             eval_results = []
             
-            # 이전에 생성된 문장들을 저장할 리스트
-            previous_sentences = []
-            
             for i, record in enumerate(person_records):
                 date = record.get("date", "날짜 없음")
                 status_text.text(f"🔍 {date} 특이사항 평가 중... ({i+1}/{total})")
+                
+                # 날짜별 입력 데이터 디버그 출력
+                print(f"\n=== DEBUG: {date} 입력 데이터 ===")
+                print(f"  프로그램 상세: {record.get('prog_enhance_detail', '')}")
+                print(f"  기본 훈련: {record.get('prog_basic', '')}")
+                print(f"  인지 활동: {record.get('prog_activity', '')}")
+                print(f"  인지 훈련: {record.get('prog_cognitive', '')}")
+                print(f"  신체 활동: {record.get('physical_function', '')}")
+                print(f"  청결 관리: {record.get('hygiene_care', '')}")
+                print("=" * 40)
                 
                 physical_note = record.get("physical_note", "")
                 cognitive_note = record.get("cognitive_note", "")
                 
                 if physical_note.strip() or cognitive_note.strip():
                     with st.spinner(f"{date} 특이사항 평가 중..."):
-                        result = evaluation_service.evaluate_special_note_with_ai(record, previous_sentences)
+                        # 날짜별 독립 처리 - 누적 데이터 초기화
+                        result = evaluation_service.evaluate_special_note_with_ai(record)
                         
                         if result:
-                            # 생성된 문장들을 이전 문장 리스트에 추가
-                            if "physical" in result and "corrected_note" in result["physical"]:
-                                previous_sentences.append(result["physical"]["corrected_note"])
-                            if "cognitive" in result and "corrected_note" in result["cognitive"]:
-                                previous_sentences.append(result["cognitive"]["corrected_note"])
-                            
                             # 평가 결과 저장
                             eval_result = {
                                 "date": date,
@@ -389,9 +399,11 @@ def render_ai_evaluation_tab():
                 })
         
         # 평가되지 않은 원본 데이터도 표시
+        print("\n=== DEBUG: 원본 데이터 표시 전 확인 ===")
         for record in person_records:
             date = record.get("date", "")
             physical_note = record.get("physical_note", "")
+            print(f"날짜: {date}, 신체 특이사항: {physical_note[:50] if physical_note else '없음'}...")
             if physical_note.strip() and not any(e["날짜"] == date for e in physical_evaluations):
                 physical_evaluations.append({
                     "날짜": date,

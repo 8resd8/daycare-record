@@ -394,10 +394,10 @@ class CareRecordParser:
                 if idx["prog_cog"] != -1: record["prog_cognitive"] = self._check_status(self._get_cell(table_data, idx["prog_cog"], col_idx))
                 if idx["prog_ther"] != -1: record["prog_therapy"] = self._check_status(self._get_cell(table_data, idx["prog_ther"], col_idx))
                 if idx["prog_detail"] != -1:
-                    # 먼저 해당 셀의 실제 값을 확인
+                    # 해당 셀의 값만 직접 사용
                     cell_value = self._get_cell(table_data, idx["prog_detail"], col_idx)
                     if cell_value and cell_value.strip() and cell_value.strip() != "-":
-                        record["prog_enhance_detail"] = self._pick_nearby_text(table_data, idx["prog_detail"], col_idx, window=8)
+                        record["prog_enhance_detail"] = cell_value.strip()
                     else:
                         record["prog_enhance_detail"] = ""
 

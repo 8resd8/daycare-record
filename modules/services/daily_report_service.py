@@ -1,6 +1,7 @@
 """AI 평가 서비스 - 일일 기록 평가 비즈니스 로직"""
 
 import json
+import re
 from typing import Dict, Optional, Any, List
 from modules.clients.daily_prompt import get_special_note_prompt
 from modules.repositories import AiEvaluationRepository
@@ -17,19 +18,15 @@ class EvaluationService:
         self.ai_eval_repo = AiEvaluationRepository()
     
         
-    def evaluate_special_note_with_ai(self, record: dict, previous_sentences: List[str] = None) -> Optional[Dict]:
+    def evaluate_special_note_with_ai(self, record: dict) -> Optional[Dict]:
         """XML 형식으로 특이사항 평가
         
         Args:
             record: 전체 기록 딕셔너리
-            previous_sentences: 이전에 생성된 문장 리스트 (중복 방지용)
             
         Returns:
             평가 결과 딕셔너리 또는 None
         """
-        if previous_sentences is None:
-            previous_sentences = []
-            
         physical_note = record.get('physical_note', '')
         cognitive_note = record.get('cognitive_note', '')
         
@@ -74,13 +71,50 @@ class EvaluationService:
             
             result = json.loads(content)
             
-            # 3개 후보 중에서 가장 유사도가 낮은 문장 선택
-            result = self._select_most_unique_sentences(result, previous_sentences)
+            # 3개 후보 중에서 첫 번째 선택 (날짜별 독립 처리)
+            result = {
+                "physical": result["physical_candidates"][0],
+                "cognitive": result["cognitive_candidates"][0]
+            }
             
             return result
         except Exception as e:
             print(f'특이사항 AI 평가 중 오류 발생: {e}')
             return None
+    
+    def _extract_programs_from_text(self, text: str) -> List[str]:
+        """텍스트에서 프로그램명을 추출"""
+        if not text:
+            return []
+        
+        # 일반적인 프로그램명 패턴
+        patterns = [
+            r'([가-힣]+교실)',
+            r'([가-힣]+훈련)',
+            r'([가-힣]+프로그램)',
+            r'([가-힣]+활동)',
+            r'([가-힣]+체조)',
+            r'([가-힣]+노래자랑)',
+            r'([가-힣]+워크북)',
+            r'([가-힣]+관리)',
+            r'재난상황\s*대응훈련',
+            r'두뇌튼튼교실',
+            r'보은노래자랑',
+            r'힘뇌체조',
+            r'미니골프',
+            r'인지활동형프로그램'
+        ]
+        
+        programs = []
+        for pattern in patterns:
+            matches = re.findall(pattern, text)
+            for match in matches:
+                if isinstance(match, tuple):
+                    match = match[0]
+                if match and match not in programs:
+                    programs.append(match)
+        
+        return programs
     
     def _select_most_unique_sentences(self, result: Dict, previous_sentences: List[str]) -> Dict:
         """3개 후보 중에서 이전 문장들과 가장 유사도가 낮은 문장 선택"""
