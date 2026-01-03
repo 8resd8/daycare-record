@@ -401,16 +401,14 @@ def render_ai_evaluation_tab():
                         "날짜": date,
                         "원본 내용": result["physical_note"],  # 원본은 그대로 유지
                         "수정 제안": "미이용",  # 수정 제안에만 미이용 표시
-                        "수정 근거": "총시간이 " + total_service_time + "이므로 특이사항 없음",
-                        "등급": "미이용"
+                        "등급": "평가없음"
                     })
                 else:
                     physical_evaluations.append({
                         "날짜": date,
                         "원본 내용": result["physical_note"],
                         "수정 제안": result["physical_result"].get("corrected_note", ""),
-                        "수정 근거": result["physical_result"].get("reason", ""),
-                        "등급": "개선" if result["physical_result"] else "평가없음"
+                        "등급": result["physical_result"].get("grade", "평가없음")
                     })
         
         # 평가되지 않은 원본 데이터도 표시
@@ -431,7 +429,6 @@ def render_ai_evaluation_tab():
                     "날짜": date,
                     "원본 내용": physical_note,  # 원본은 그대로 유지
                     "수정 제안": "미이용",  # 수정 제안에만 미이용 표시
-                    "수정 근거": "총시간이 " + total_service_time + "이므로 특이사항 없음",
                     "등급": "미이용"
                 })
             elif physical_note.strip():
@@ -439,7 +436,6 @@ def render_ai_evaluation_tab():
                     "날짜": date,
                     "원본 내용": physical_note,
                     "수정 제안": "",
-                    "수정 근거": "",
                     "등급": "평가없음"
                 })
         
@@ -466,7 +462,6 @@ def render_ai_evaluation_tab():
                         "날짜": date,
                         "원본 내용": result["cognitive_note"],  # 원본은 그대로 유지
                         "수정 제안": "미이용",  # 수정 제안에만 미이용 표시
-                        "수정 근거": "총시간이 " + total_service_time + "이므로 특이사항 없음",
                         "등급": "미이용"
                     })
                 else:
@@ -474,8 +469,7 @@ def render_ai_evaluation_tab():
                         "날짜": date,
                         "원본 내용": result["cognitive_note"],
                         "수정 제안": result["cognitive_result"].get("corrected_note", ""),
-                        "수정 근거": result["cognitive_result"].get("reason", ""),
-                        "등급": "개선" if result["cognitive_result"] else "평가없음"
+                        "등급": result["cognitive_result"].get("grade", "평가없음")
                     })
         
         # 평가되지 않은 원본 데이터도 표시
@@ -494,7 +488,6 @@ def render_ai_evaluation_tab():
                     "날짜": date,
                     "원본 내용": cognitive_note,  # 원본은 그대로 유지
                     "수정 제안": "미이용",  # 수정 제안에만 미이용 표시
-                    "수정 근거": "총시간이 " + total_service_time + "이므로 특이사항 없음",
                     "등급": "미이용"
                 })
             elif cognitive_note.strip():
@@ -502,7 +495,6 @@ def render_ai_evaluation_tab():
                     "날짜": date,
                     "원본 내용": cognitive_note,
                     "수정 제안": "",
-                    "수정 근거": "",
                     "등급": "평가없음"
                 })
         

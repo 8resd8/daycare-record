@@ -17,6 +17,41 @@ class EvaluationService:
     def __init__(self):
         self.ai_eval_repo = AiEvaluationRepository()
     
+    def _convert_ox_to_score(self, evaluation: dict) -> dict:
+        """O/X 평가 결과를 점수로 변환
+        
+        Args:
+            evaluation: O/X 평가 결과가 포함된 딕셔너리
+            
+        Returns:
+            점수(3-우수, 2-평균, 1-개선)와 등급이 추가된 딕셔너리
+        """
+        if not evaluation:
+            return evaluation
+        
+        # O 개수 세기
+        o_count = 0
+        for metric in ['oer_fidelity', 'specificity', 'grammar']:
+            if evaluation.get(metric) == 'O':
+                o_count += 1
+        
+        # 점수와 등급 결정
+        if o_count == 3:
+            score = 3
+            grade = '우수'
+        elif o_count == 2:
+            score = 2
+            grade = '평균'
+        else:
+            score = 1
+            grade = '개선'
+        
+        # 점수와 등급 추가
+        evaluation['score'] = score
+        evaluation['grade'] = grade
+        
+        return evaluation
+    
         
     def evaluate_special_note_with_ai(self, record: dict) -> Optional[Dict]:
         """XML 형식으로 특이사항 평가
@@ -76,6 +111,10 @@ class EvaluationService:
                 "physical": result["physical_candidates"][0],
                 "cognitive": result["cognitive_candidates"][0]
             }
+            
+            # O/X 평가 결과를 점수로 변환
+            result["physical"] = self._convert_ox_to_score(result["physical"])
+            result["cognitive"] = self._convert_ox_to_score(result["cognitive"])
             
             return result
         except Exception as e:

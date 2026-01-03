@@ -27,15 +27,15 @@ SYSTEM_PROMPT = """
     <writing_examples>
         <example>
             - 입력: 재난상황 대응훈련 완료
-            - 출력: 2025년하반기재난상황 대응훈련에서 화재 비상 시 대피 요령을 안내해 드리자 당황하지 않고 낮은 자세를 유지하며 지정된 대피로를 따라 안전하게 이동하심. (82자)
+            - 출력: 2025년하반기재난상황 대응훈련에서 화재 비상 시 대피 요령을 안내해 드리자 당황하지 않고 낮은 자세를 유지하며 지정된 대피로를 따라 안전하게 이동하심.
         </example>
         <example>
             - 입력: 두뇌튼튼교실 워크북 완료
-            - 출력: 두뇌튼튼교실 관찰집중력 워크북 활동 중 문항을 천천히 읽어드리자 높은 집중력을 발휘하여 모든 그림자 연결 문제를 정확하게 완수하심. (85자)
+            - 출력: 두뇌튼튼교실 관찰집중력 워크북 활동 중 문항을 천천히 읽어드리자 높은 집중력을 발휘하여 모든 그림자 연결 문제를 정확하게 완수하심.
         </example>
         <example>
             - 입력: 보은노래자랑, 힘뇌체조 완료
-            - 출력: 보은노래자랑에서 "아침의 나라"를 함께 부르며 박수로 리듬을 맞춰드리니 즐겁게 참여하시고, 이어진 힘뇌체조에서는 팔·다리 스트레칭을 꾸준히 실천하심. (94자)
+            - 출력: 보은노래자랑에서 "아침의 나라"를 함께 부르며 박수로 리듬을 맞춰드리니 즐겁게 참여하시고, 이어진 힘뇌체조에서는 팔·다리 스트레칭을 꾸준히 실천하심.
         </example>
     </writing_examples>
 
@@ -43,16 +43,51 @@ SYSTEM_PROMPT = """
     오직 아래의 JSON 구조로만 답변하십시오.
     {
         "physical_candidates": [
-            { "corrected_note": "후보1", "reason": "근거1" },
-            { "corrected_note": "후보2", "reason": "근거2" },
-            { "corrected_note": "후보3", "reason": "근거3" }
+            { 
+                "corrected_note": "후보1",
+                "oer_fidelity": "O",
+                "specificity": "O", 
+                "grammar": "O"
+            },
+            { 
+                "corrected_note": "후보2",
+                "oer_fidelity": "X",
+                "specificity": "O", 
+                "grammar": "O"
+            },
+            { 
+                "corrected_note": "후보3",
+                "oer_fidelity": "O",
+                "specificity": "X", 
+                "grammar": "X"
+            }
         ],
         "cognitive_candidates": [
-            { "corrected_note": "후보1", "reason": "근거1" },
-            { "corrected_note": "후보2", "reason": "근거2" },
-            { "corrected_note": "후보3", "reason": "근거3" }
+            { 
+                "corrected_note": "후보1",
+                "oer_fidelity": "O",
+                "specificity": "O", 
+                "grammar": "O"
+            },
+            { 
+                "corrected_note": "후보2",
+                "oer_fidelity": "X",
+                "specificity": "O", 
+                "grammar": "O"
+            },
+            { 
+                "corrected_note": "후보3",
+                "oer_fidelity": "O",
+                "specificity": "X", 
+                "grammar": "X"
+            }
         ]
     }
+    
+    평가 지표 설명:
+    - oer_fidelity (OER 충실도): 관찰(O), 개입(E), 반응(R)이 모두 포함되었는가? (O/X)
+    - specificity (구체성): <main_programs>에 명시된 활동명과 구체적 행동이 언급되었는가? (O/X)
+    - grammar (문법): 띄어쓰기를 제외한 문법이 적합한가? (O/X)
     </output_format>
 </system_instruction>
 """
@@ -133,6 +168,12 @@ def get_special_note_prompt(record: dict) -> tuple[str, str]:
             <training_status>{record.get('prog_cognitive', '')}</training_status>
         </cognitive_function_training>
     </functional_recovery_training>
+    
+    <!-- 현재 작성된 특이사항 -->
+    <original_notes>
+        <physical_note>{record.get('physical_note', '')}</physical_note>
+        <cognitive_note>{record.get('cognitive_note', '')}</cognitive_note>
+    </original_notes>
 </daily_activity_record>
 
 위 데이터를 바탕으로 [신체활동지원]과 [인지관리및의사소통]의 특이사항을 작성하십시오.
