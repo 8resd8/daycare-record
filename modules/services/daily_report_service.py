@@ -76,16 +76,6 @@ class EvaluationService:
         
         system_prompt, user_prompt = get_special_note_prompt(record)
         
-        # 디버그 출력
-        print("=" * 50)
-        print("DEBUG: 프롬프트 내용")
-        print("=" * 50)
-        print("SYSTEM PROMPT:")
-        print(system_prompt)
-        print("\nUSER PROMPT:")
-        print(user_prompt)
-        print("=" * 50)
-        
         try:
             response = ai_client.chat_completion(
                 model='gpt-4o-mini',
@@ -106,13 +96,34 @@ class EvaluationService:
             
             result = json.loads(content)
             
+            # AI 결과 디버그 출력
+            print("=" * 50)
+            print("DEBUG: AI 평가 결과")
+            print("=" * 50)
+            print("원본 신체활동 평가:", result.get("original_physical_evaluation", {}))
+            print("원본 인지관리 평가:", result.get("original_cognitive_evaluation", {}))
+            print("생성된 신체활동:", result["physical_candidates"][0])
+            print("생성된 인지관리:", result["cognitive_candidates"][0])
+            print("\n[O/X 평가 결과]")
+            print(f"원본 신체: OER={result.get('original_physical_evaluation', {}).get('oer_fidelity', '-')}, "
+                  f"구체성={result.get('original_physical_evaluation', {}).get('specificity', '-')}, "
+                  f"문법={result.get('original_physical_evaluation', {}).get('grammar', '-')}")
+            print(f"원본 인지: OER={result.get('original_cognitive_evaluation', {}).get('oer_fidelity', '-')}, "
+                  f"구체성={result.get('original_cognitive_evaluation', {}).get('specificity', '-')}, "
+                  f"문법={result.get('original_cognitive_evaluation', {}).get('grammar', '-')}")
+            print("=" * 50)
+            
             # 3개 후보 중에서 첫 번째 선택 (날짜별 독립 처리)
             result = {
+                "original_physical": result.get("original_physical_evaluation", {}),
+                "original_cognitive": result.get("original_cognitive_evaluation", {}),
                 "physical": result["physical_candidates"][0],
                 "cognitive": result["cognitive_candidates"][0]
             }
             
             # O/X 평가 결과를 점수로 변환
+            result["original_physical"] = self._convert_ox_to_score(result["original_physical"])
+            result["original_cognitive"] = self._convert_ox_to_score(result["original_cognitive"])
             result["physical"] = self._convert_ox_to_score(result["physical"])
             result["cognitive"] = self._convert_ox_to_score(result["cognitive"])
             
