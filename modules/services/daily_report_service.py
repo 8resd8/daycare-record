@@ -5,6 +5,7 @@ import re
 from typing import Dict, Optional, Any, List
 from modules.clients.daily_prompt import get_special_note_prompt
 from modules.repositories import AiEvaluationRepository
+from modules.repositories.base import BaseRepository
 from modules.clients.ai_client import get_ai_client
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -16,6 +17,7 @@ class EvaluationService:
     
     def __init__(self):
         self.ai_eval_repo = AiEvaluationRepository()
+        self.db_repo = BaseRepository()
     
     def _convert_ox_to_score(self, evaluation: dict) -> dict:
         """O/X 평가 결과를 점수로 변환
@@ -53,6 +55,150 @@ class EvaluationService:
         return evaluation
     
         
+    def save_special_note_evaluation(self, record_id: int, evaluation_result: dict) -> None:
+        """특이사항 평가 결과를 DB에 저장
+        
+        Args:
+            record_id: 일일 기록 ID
+            evaluation_result: AI 평가 결과
+        """
+        if not evaluation_result:
+            return
+            
+        # 신체활동 특이사항 저장
+        if 'original_physical' in evaluation_result:
+            physical = evaluation_result['original_physical']
+            self._save_evaluation_to_db(
+                record_id, 'SPECIAL_NOTE_PHYSICAL',
+                physical.get('oer_fidelity', 'X'),
+                physical.get('specificity', 'X'),
+                physical.get('grammar', 'X'),
+                physical.get('grade', '개선'),
+                evaluation_result.get('physical_note', ''),
+                None,  # reason_text
+                evaluation_result.get('physical', {}).get('corrected_note', '')
+            )
+        
+        # 인지관리 특이사항 저장
+        if 'original_cognitive' in evaluation_result:
+            cognitive = evaluation_result['original_cognitive']
+            self._save_evaluation_to_db(
+                record_id, 'SPECIAL_NOTE_COGNITIVE',
+                cognitive.get('oer_fidelity', 'X'),
+                cognitive.get('specificity', 'X'),
+                cognitive.get('grammar', 'X'),
+                cognitive.get('grade', '개선'),
+                evaluation_result.get('cognitive_note', ''),
+                None,  # reason_text
+                evaluation_result.get('cognitive', {}).get('corrected_note', '')
+            )
+    
+    def _save_evaluation_to_db(self, record_id: int, category: str,
+                              oer_fidelity: str, specificity: str, grammar: str,
+                              grade: str, original_text: str, reason_text: str,
+                              suggestion_text: str) -> None:
+        """개별 평가 결과를 DB에 저장"""
+        # 카테고리 매핑
+        category_map = {
+            "SPECIAL_NOTE_PHYSICAL": "신체",
+            "SPECIAL_NOTE_COGNITIVE": "인지"
+        }
+        korean_category = category_map.get(category, category)
+        
+        # 기존 평가 확인
+        check_query = 'SELECT ai_eval_id FROM ai_evaluations WHERE record_id = %s AND category = %s'
+        existing = self.db_repo._execute_query_one(check_query, (record_id, korean_category))
+        
+        if existing:
+            # 업데이트
+            update_query = '''
+                UPDATE ai_evaluations SET
+                    oer_fidelity = %s,
+                    specificity_score = %s,
+                    grammar_score = %s,
+                    grade_code = %s,
+                    reason_text = %s,
+                    suggestion_text = %s,
+                    original_text = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE record_id = %s AND category = %s
+            '''
+            self.db_repo._execute_transaction(update_query, (
+                oer_fidelity, specificity, grammar, grade,
+                reason_text, suggestion_text, original_text,
+                record_id, korean_category
+            ))
+        else:
+            # 삽입
+            insert_query = '''
+                INSERT INTO ai_evaluations (
+                    record_id, category, oer_fidelity, specificity_score, grammar_score,
+                    grade_code, reason_text, suggestion_text, original_text,
+                    created_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+            '''
+            self.db_repo._execute_transaction(insert_query, (
+                record_id, korean_category, oer_fidelity, specificity,
+                grammar, grade, reason_text, suggestion_text, original_text
+            ))
+    
+    def get_record_id(self, customer_name: str, date: str) -> Optional[int]:
+        """고객명과 날짜로 record_id 조회"""
+        print(f"DEBUG: get_record_id 호출 - customer_name={customer_name}, date={date}")
+        
+        query = '''
+            SELECT di.record_id 
+            FROM daily_infos di
+            JOIN customers c ON di.customer_id = c.customer_id
+            WHERE c.name = %s AND di.date = %s
+        '''
+        result = self.db_repo._execute_query_one(query, (customer_name, date))
+        
+        if result:
+            print(f"DEBUG: record_id 조회 성공 - {result['record_id']}")
+        else:
+            print(f"DEBUG: record_id 조회 실패 - 결과 없음")
+            
+        return result['record_id'] if result else None
+    
+    def get_evaluation_from_db(self, record_id: int, category: str) -> Dict[str, str]:
+        """DB에서 평가 결과(수정 제안과 등급) 조회
+        
+        Args:
+            record_id: 일일 기록 ID
+            category: 카테고리 (SPECIAL_NOTE_PHYSICAL 또는 SPECIAL_NOTE_COGNITIVE)
+            
+        Returns:
+            {'suggestion': str, 'grade': str} 형태의 딕셔너리
+        """
+        # 카테고리 매핑
+        category_map = {
+            "SPECIAL_NOTE_PHYSICAL": "신체",
+            "SPECIAL_NOTE_COGNITIVE": "인지"
+        }
+        korean_category = category_map.get(category, category)
+        
+        query = '''
+            SELECT suggestion_text, grade_code 
+            FROM ai_evaluations 
+            WHERE record_id = %s AND category = %s
+        '''
+        result = self.db_repo._execute_query_one(query, (record_id, korean_category))
+        
+        if result:
+            return {
+                'suggestion': result['suggestion_text'] or '',
+                'grade': result['grade_code'] or '평가없음'
+            }
+        else:
+            return {
+                'suggestion': '',
+                'grade': '평가없음'
+            }
+    
     def evaluate_special_note_with_ai(self, record: dict) -> Optional[Dict]:
         """XML 형식으로 특이사항 평가
         

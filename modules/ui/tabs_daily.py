@@ -18,6 +18,18 @@ def render_ai_evaluation_tab():
 
     if not active_doc:
         st.info("👈 왼쪽 사이드바에서 PDF 파일을 선택해주세요.")
+        return
+    
+    # 고객이 변경되었는지 확인하고 세션 상태 초기화
+    current_customer_key = f"{active_doc.get('name', '')}_{active_doc.get('id', '')}"
+    previous_customer_key = st.session_state.get('last_customer_key', '')
+    
+    if current_customer_key != previous_customer_key:
+        # 고객이 변경되면 평가 결과 초기화
+        st.session_state.special_note_eval_results = []
+        st.session_state.last_customer_key = current_customer_key
+        print(f"DEBUG: 고객 변경됨 - 이전: {previous_customer_key}, 현재: {current_customer_key}")
+    
     elif not person_records:
         st.warning("분석할 데이터가 없습니다.")
     else:
@@ -350,6 +362,30 @@ def render_ai_evaluation_tab():
                         result = evaluation_service.evaluate_special_note_with_ai(record)
                         
                         if result:
+                            # record_id 조회
+                            customer_name = record.get('customer_name', '')
+                            print(f"DEBUG: record_id 조회 - customer_name={customer_name}, date={date}")
+                            
+                            record_id = evaluation_service.get_record_id(
+                                customer_name,
+                                date
+                            )
+                            
+                            print(f"DEBUG: 조회된 record_id={record_id}")
+                            
+                            if record_id:
+                                # DB에 평가 결과 저장 (원본 특이사항 텍스트 추가)
+                                result_with_notes = result.copy()
+                                result_with_notes['physical_note'] = physical_note
+                                result_with_notes['cognitive_note'] = cognitive_note
+                                
+                                evaluation_service.save_special_note_evaluation(
+                                    record_id, result_with_notes
+                                )
+                                print(f"DEBUG: DB 저장 완료 - record_id={record_id}")
+                            else:
+                                print(f"DEBUG: DB 저장 실패 - record_id를 찾을 수 없음")
+                            
                             # 평가 결과 저장
                             eval_result = {
                                 "date": date,
@@ -373,59 +409,46 @@ def render_ai_evaluation_tab():
         st.divider()
         st.write("### 📊 특이사항 평가 결과")
         
-        # 세션 상태에서 평가 결과 가져오기
-        eval_results = st.session_state.get("special_note_eval_results", [])
-        
         # 신체활동 특이사항 평가 결과
         st.write("#### 🏃 신체활동 특이사항")
         physical_evaluations = []
         
-        for result in eval_results:
-            if result["physical_note"].strip() or result["physical_result"]:
-                # 해당 날짜의 총시간 정보 확인
-                date = result["date"]
-                original_record = next((r for r in person_records if r["date"] == date), {})
-                total_service_time = original_record.get("total_service_time", "").strip()
-                
-                # 총시간이 미이용/일정없음/결석인 경우
-                if total_service_time in ["미이용", "일정없음", "결석"]:
-                    physical_evaluations.append({
-                        "날짜": date,
-                        "원본 등급": "평가없음",
-                        "수정 제안": "미이용",  # 수정 제안에만 미이용 표시
-                        "원본 내용": result["physical_note"]  # 원본은 그대로 유지
-                    })
-                else:
-                    physical_evaluations.append({
-                        "날짜": date,
-                        "원본 등급": result.get("original_physical", {}).get("grade", "평가없음"),
-                        "수정 제안": result["physical_result"].get("corrected_note", ""),
-                        "원본 내용": result["physical_note"]
-                    })
-        
-        # 평가되지 않은 원본 데이터도 표시
+        # 현재 사람의 모든 기록에 대해 평가 결과 확인
         for record in person_records:
             date = record.get("date", "")
             physical_note = record.get("physical_note", "")
             total_service_time = record.get("total_service_time", "").strip()
             
-            # 이미 평가된 날짜는 건너뛰기
-            if any(e["날짜"] == date for e in physical_evaluations):
-                continue
-                
+            # record_id 조회
+            record_id = evaluation_service.get_record_id(
+                record.get('customer_name', ''),
+                date
+            )
+            
             # 총시간이 미이용/일정없음/결석인 경우
             if total_service_time in ["미이용", "일정없음", "결석"]:
                 physical_evaluations.append({
                     "날짜": date,
                     "원본 등급": "평가없음",
-                    "수정 제안": "미이용",  # 수정 제안에만 미이용 표시
-                    "원본 내용": physical_note  # 원본은 그대로 유지
+                    "수정 제안": "미이용",
+                    "원본 내용": physical_note
                 })
             elif physical_note.strip():
+                # DB에서 수정 제안과 등급 조회
+                evaluation = {
+                    'suggestion': '',
+                    'grade': '평가없음'
+                }
+                
+                if record_id:
+                    evaluation = evaluation_service.get_evaluation_from_db(
+                        record_id, 'SPECIAL_NOTE_PHYSICAL'
+                    )
+                
                 physical_evaluations.append({
                     "날짜": date,
-                    "원본 등급": "평가없음",
-                    "수정 제안": "",
+                    "원본 등급": evaluation['grade'],
+                    "수정 제안": evaluation['suggestion'],
                     "원본 내용": physical_note
                 })
         
@@ -439,52 +462,42 @@ def render_ai_evaluation_tab():
         st.write("#### 🧠 인지관리 특이사항")
         cognitive_evaluations = []
         
-        for result in eval_results:
-            if result["cognitive_note"].strip() or result["cognitive_result"]:
-                # 해당 날짜의 총시간 정보 확인
-                date = result["date"]
-                original_record = next((r for r in person_records if r["date"] == date), {})
-                total_service_time = original_record.get("total_service_time", "").strip()
-                
-                # 총시간이 미이용/일정없음/결석인 경우
-                if total_service_time in ["미이용", "일정없음", "결석"]:
-                    cognitive_evaluations.append({
-                        "날짜": date,
-                        "원본 등급": "평가없음",
-                        "수정 제안": "미이용",  # 수정 제안에만 미이용 표시
-                        "원본 내용": result["cognitive_note"]  # 원본은 그대로 유지
-                    })
-                else:
-                    cognitive_evaluations.append({
-                        "날짜": date,
-                        "원본 등급": result.get("original_cognitive", {}).get("grade", "평가없음"),
-                        "수정 제안": result["cognitive_result"].get("corrected_note", ""),
-                        "원본 내용": result["cognitive_note"]
-                    })
-        
-        # 평가되지 않은 원본 데이터도 표시
+        # 현재 사람의 모든 기록에 대해 평가 결과 확인
         for record in person_records:
             date = record.get("date", "")
             cognitive_note = record.get("cognitive_note", "")
             total_service_time = record.get("total_service_time", "").strip()
             
-            # 이미 평가된 날짜는 건너뛰기
-            if any(e["날짜"] == date for e in cognitive_evaluations):
-                continue
-                
+            # record_id 조회
+            record_id = evaluation_service.get_record_id(
+                record.get('customer_name', ''),
+                date
+            )
+            
             # 총시간이 미이용/일정없음/결석인 경우
             if total_service_time in ["미이용", "일정없음", "결석"]:
                 cognitive_evaluations.append({
                     "날짜": date,
                     "원본 등급": "평가없음",
-                    "수정 제안": "미이용",  # 수정 제안에만 미이용 표시
-                    "원본 내용": cognitive_note  # 원본은 그대로 유지
+                    "수정 제안": "미이용",
+                    "원본 내용": cognitive_note
                 })
             elif cognitive_note.strip():
+                # DB에서 수정 제안과 등급 조회
+                evaluation = {
+                    'suggestion': '',
+                    'grade': '평가없음'
+                }
+                
+                if record_id:
+                    evaluation = evaluation_service.get_evaluation_from_db(
+                        record_id, 'SPECIAL_NOTE_COGNITIVE'
+                    )
+                
                 cognitive_evaluations.append({
                     "날짜": date,
-                    "원본 등급": "평가없음",
-                    "수정 제안": "",
+                    "원본 등급": evaluation['grade'],
+                    "수정 제안": evaluation['suggestion'],
                     "원본 내용": cognitive_note
                 })
         

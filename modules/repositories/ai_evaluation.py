@@ -7,8 +7,10 @@ from .base import BaseRepository
 class AiEvaluationRepository(BaseRepository):
     """Repository for AI evaluation operations."""
     
-    def save_evaluation(self, record_id: int, category: str, note_writer_user_id: int,
-                       evaluation_result: Dict, original_text: str = None) -> None:
+    def save_evaluation(self, record_id: int, category: str, 
+                       oer_fidelity: str, specificity_score: str, grammar_score: str,
+                       grade_code: str, original_text: str, reason_text: str = None,
+                       suggestion_text: str = None) -> None:
         """Save or update AI evaluation result."""
         # 영어 카테고리를 한국어로 매핑
         category_map = {
@@ -16,8 +18,8 @@ class AiEvaluationRepository(BaseRepository):
             "COGNITIVE": "인지", 
             "NURSING": "간호",
             "RECOVERY": "기능",
-            "SPECIAL_NOTE_PHYSICAL": "특이사항(신체)",
-            "SPECIAL_NOTE_COGNITIVE": "특이사항(인지)"
+            "SPECIAL_NOTE_PHYSICAL": "신체",
+            "SPECIAL_NOTE_COGNITIVE": "인지"
         }
         korean_category = category_map.get(category, category)
         
