@@ -40,6 +40,9 @@ jobs:
           script: |
             cd /home/${{ secrets.EC2_USERNAME }}/arisa
             
+            # env 생성
+            echo "${{ secrets.ENV_FILE }}" > .env
+            
             # Docker 이미지 로드
             docker load < arisa-internal-tool.tar.gz
             
