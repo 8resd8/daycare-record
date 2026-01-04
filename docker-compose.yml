@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arisa-streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - ./.streamlit/secrets.toml:/app/.streamlit/secrets.toml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    networks:
+      - arisa-network
+
+networks:
+  arisa-network:
+    driver: bridge
