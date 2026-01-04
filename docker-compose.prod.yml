@@ -18,6 +18,7 @@ services:
   streamlit:
     image: arisa-internal-tool:latest
     container_name: arisa-streamlit-prod
+    command: streamlit run app.py --server.baseUrlPath /boeun
     ports:
       - "127.0.0.1:8501:8501"
     volumes:
