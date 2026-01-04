@@ -407,9 +407,9 @@ class EvaluationService:
             기본값이 설정된 빈 평가 결과 딕셔너리
         """
         return {
-            'consistency_score': 0,
-            'grammar_score': 0,
-            'specificity_score': 0,
+            'oer_fidelity': 'X',
+            'specificity': 'X',
+            'grammar': 'X',
             'grade_code': '평가없음',
             'reasoning_process': '',
             'suggestion_text': ''
@@ -426,8 +426,28 @@ class EvaluationService:
             evaluation_result: 평가 결과
             original_text: 원본 텍스트
         """
-        self.ai_eval_repo.save_evaluation(record_id, category, note_writer_user_id, 
-                                         evaluation_result, original_text)
+        # evaluation_result에서 점수 정보 추출
+        if evaluation_result:
+            oer_fidelity = evaluation_result.get('oer_fidelity', 'X')
+            # specificity와 specificity_score 모두 지원
+            specificity_score = evaluation_result.get('specificity_score') or evaluation_result.get('specificity', 'X')
+            # grammar와 grammar_score 모두 지원
+            grammar_score = evaluation_result.get('grammar_score') or evaluation_result.get('grammar', 'X')
+            grade_code = evaluation_result.get('grade_code', '평가없음')
+            reason_text = evaluation_result.get('reasoning_process', '') or evaluation_result.get('reason', '')
+            suggestion_text = evaluation_result.get('suggestion_text', '') or evaluation_result.get('corrected_note', '')
+        else:
+            oer_fidelity = 'X'
+            specificity_score = 'X'
+            grammar_score = 'X'
+            grade_code = '평가없음'
+            reason_text = ''
+            suggestion_text = ''
+        
+        self.ai_eval_repo.save_evaluation(
+            record_id, category, oer_fidelity, specificity_score, grammar_score,
+            grade_code, original_text or '', reason_text, suggestion_text
+        )
     
     def process_daily_note_evaluation(self, record_id: int, category: str, note_text: str, 
                                     note_writer_user_id: int, writer: str = '', 
@@ -447,18 +467,66 @@ class EvaluationService:
             평가 결과 딕셔너리
         """
         if not note_text or note_text.strip() in ['특이사항 없음', '결석', '']:
-            evaluation_result = None
-        else:
-            evaluation_result = self.evaluate_note_with_ai(note_text, category, writer, customer_name, date)
+            # 빈 텍스트는 평가하지 않음
+            return {
+                'grade_code': '평가없음',
+                'evaluation': None
+            }
         
-        if evaluation_result:
-            # 계산된 등급을 평가 결과에 추가
-            korean_grade = self.calculate_grade(evaluation_result)
-            evaluation_result['grade_code'] = korean_grade
+        # DB에서 record 정보 가져오기
+        query = '''
+            SELECT di.*, c.name as customer_name,
+                   dp.note as physical_note, dc.note as cognitive_note,
+                   dn.note as nursing_note, dr.note as functional_note
+            FROM daily_infos di
+            LEFT JOIN customers c ON di.customer_id = c.customer_id
+            LEFT JOIN daily_physicals dp ON dp.record_id = di.record_id
+            LEFT JOIN daily_cognitives dc ON dc.record_id = di.record_id
+            LEFT JOIN daily_nursings dn ON dn.record_id = di.record_id
+            LEFT JOIN daily_recoveries dr ON dr.record_id = di.record_id
+            WHERE di.record_id = %s
+        '''
+        record = self.db_repo._execute_query_one(query, (record_id,))
+        
+        if not record:
+            # record가 없으면 평가하지 않음
+            return {
+                'grade_code': '평가없음',
+                'evaluation': None
+            }
+        
+        # PHYSICAL, COGNITIVE만 AI 평가
+        if category in ['PHYSICAL', 'COGNITIVE']:
+            # evaluate_special_note_with_ai 호출
+            ai_result = self.evaluate_special_note_with_ai(record)
+            
+            if ai_result:
+                # 카테고리에 맞는 평가 결과 추출
+                if category == 'PHYSICAL':
+                    evaluation_result = ai_result.get('original_physical', {})
+                    # 수정 제안(corrected_note)도 포함
+                    corrected_note = ai_result.get('physical', {}).get('corrected_note', '')
+                elif category == 'COGNITIVE':
+                    evaluation_result = ai_result.get('original_cognitive', {})
+                    # 수정 제안(corrected_note)도 포함
+                    corrected_note = ai_result.get('cognitive', {}).get('corrected_note', '')
+                
+                korean_grade = evaluation_result.get('grade', '평균')
+                evaluation_result['grade_code'] = korean_grade
+                evaluation_result['corrected_note'] = corrected_note
+            else:
+                korean_grade = '평가없음'
+                evaluation_result = self.create_empty_evaluation()
         else:
-            korean_grade = '평가없음'
-            # 빈 값이나 특수 경우를 위한 0점 평가 결과 생성
-            evaluation_result = self.create_empty_evaluation()
+            # NURSING, RECOVERY는 기본 평가
+            korean_grade = '평균'
+            evaluation_result = {
+                'oer_fidelity': 'O',
+                'specificity': 'O',
+                'grammar': 'O',
+                'grade': '평균',
+                'grade_code': '평균'
+            }
         
         self.save_ai_evaluation(record_id, category, note_writer_user_id, evaluation_result, note_text)
         

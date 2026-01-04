@@ -47,7 +47,7 @@ from modules.ui import render_sidebar, render_records_tab, render_ai_evaluation_
 render_sidebar()
 
 # --- 메인 화면 구성 ---
-main_tab1, main_tab2 = st.tabs(["📄주간 상태 변화 평가", "🤖 매일 특이사항 평가"])
+main_tab1, main_tab2 = st.tabs(["📄주간 상태 변화 평가", "데일리 특이사항 평가"])
 
 # 탭 1: 기록 조회
 with main_tab1:

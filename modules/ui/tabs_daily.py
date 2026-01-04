@@ -412,9 +412,10 @@ def render_ai_evaluation_tab():
         physical_note = record.get("physical_note", "")
         total_service_time = record.get("total_service_time", "").strip()
         
-        # record_id 조회
+        # record_id 조회 - person_name 사용 (record의 customer_name이 비어있을 수 있음)
+        customer_name_for_query = record.get('customer_name') or person_name
         record_id = evaluation_service.get_record_id(
-            record.get('customer_name', ''),
+            customer_name_for_query,
             date
         )
         
@@ -467,9 +468,10 @@ def render_ai_evaluation_tab():
         cognitive_note = record.get("cognitive_note", "")
         total_service_time = record.get("total_service_time", "").strip()
         
-        # record_id 조회
+        # record_id 조회 - person_name 사용 (record의 customer_name이 비어있을 수 있음)
+        customer_name_for_query = record.get('customer_name') or person_name
         record_id = evaluation_service.get_record_id(
-            record.get('customer_name', ''),
+            customer_name_for_query,
             date
         )
         

@@ -109,7 +109,7 @@ def render_sidebar():
             person_entries = iter_person_entries()
             if person_entries:
                 st.divider()
-                st.markdown("#### 🤖 일괄 AI 처리")
+                st.markdown("#### 전체인원 AI 처리")
                 
                 # Custom CSS for green text color
                 st.markdown("""
@@ -122,24 +122,23 @@ def render_sidebar():
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("📝 주간 상태변화 기록지 생성", 
+                    if st.button("주간 상태 변화 기록 생성",
                                use_container_width=True, 
                                help="전체 인원의 주간 상태변화 기록지를 일괄 생성합니다"):
                         _batch_generate_weekly_reports(person_entries)
                 with col2:
-                    if st.button("🔍 특이사항 평가 시작", 
+                    if st.button("데일리 특이사항 평가",
                                use_container_width=True,
                                help="전체 인원의 특이사항을 일괄 평가합니다"):
                         _batch_evaluate_all_optimized(person_entries)
 
-            st.subheader("👥 전체 인원")
             person_entries = iter_person_entries()
             person_count = len(person_entries)
-            st.caption(f"총 {person_count}명")
+            st.subheader(f"👥 전체 {person_count}명")
             if not person_entries:
                 st.info("파싱된 인원이 없습니다.")
             else:
-                st.caption("이름을 선택하면 메인 화면에 상세 기록이 표시됩니다.")
+                st.caption("이름을 선택하면 상세 기록이 표시됩니다.")
                 active_person_key = ensure_active_person()
                 for entry in person_entries:
                     is_active = entry["key"] == active_person_key
@@ -319,15 +318,18 @@ def _batch_evaluate_all(person_entries):
                     })
             
             # Evaluate all records for this person using process_daily_note_evaluation
+            # 특이사항 평가는 PHYSICAL과 COGNITIVE만 수행
             for record in records:
                 categories = [
                     ("PHYSICAL", record.get("physical_note", ""), record.get("writer_physical")),
-                    ("COGNITIVE", record.get("cognitive_note", ""), record.get("writer_cognitive")),
-                    ("NURSING", record.get("nursing_note", ""), record.get("writer_nursing")),
-                    ("RECOVERY", record.get("functional_note", ""), record.get("writer_recovery"))
+                    ("COGNITIVE", record.get("cognitive_note", ""), record.get("writer_cognitive"))
                 ]
                 
                 for category, text, category_writer in categories:
+                    # 빈 텍스트는 건너뛰기
+                    if not text or text.strip() in ['특이사항 없음', '결석', '']:
+                        continue
+                    
                     note_writer_id = record.get(f"writer_{category.lower()}_id", 1)
                     
                     evaluation_service.process_daily_note_evaluation(
@@ -443,17 +445,23 @@ def _batch_evaluate_all_optimized(person_entries):
         records, person_name = args
         results = []
         
+        # 카테고리 매핑 (영어 -> 한국어)
+        category_to_korean = {
+            "PHYSICAL": "신체",
+            "COGNITIVE": "인지"
+        }
+        
         for record in records:
+            # 특이사항 평가는 PHYSICAL과 COGNITIVE만 수행
             categories = [
                 ("PHYSICAL", record.get("physical_note", ""), record.get("writer_physical")),
-                ("COGNITIVE", record.get("cognitive_note", ""), record.get("writer_cognitive")),
-                ("NURSING", record.get("nursing_note", ""), record.get("writer_nursing")),
-                ("RECOVERY", record.get("functional_note", ""), record.get("writer_recovery"))
+                ("COGNITIVE", record.get("cognitive_note", ""), record.get("writer_cognitive"))
             ]
             
             for category, text, category_writer in categories:
-                # 캐시 확인
-                cache_key = (record["record_id"], category)
+                # 캐시 확인 (한국어 카테고리로 확인)
+                korean_category = category_to_korean.get(category, category)
+                cache_key = (record["record_id"], korean_category)
                 if cache_key in evaluated_cache:
                     continue
                 
@@ -472,7 +480,7 @@ def _batch_evaluate_all_optimized(person_entries):
                         customer_name=record.get("customer_name", ""),
                         date=record.get("date", "")
                     )
-                    results.append((record["record_id"], category))
+                    results.append((record["record_id"], korean_category))
                 except Exception as e:
                     print(f"평가 오류 ({person_name}, {category}): {e}")
         
@@ -491,14 +499,19 @@ def _batch_evaluate_all_optimized(person_entries):
                 futures.append((future, person_name))
         
         # 완료된 태스크 처리
-        for future, person_name in futures:
+        for idx, (future, person_name) in enumerate(futures):
+            # 평가 시작 표시
+            status_text.text(f"🔍 [{person_name}] 평가 중... ({idx + 1}/{total})")
+            
             try:
                 future.result()
                 completed_count += 1
                 progress_bar.progress(completed_count / total)
-                status_text.text(f"{person_name} 평가 완료 ({completed_count}/{total})")
+                status_text.text(f"✅ [{person_name}] 평가 완료 ({completed_count}/{total})")
             except Exception as e:
-                st.error(f"{person_name} 평가 중 오류: {e}")
+                st.error(f"❌ [{person_name}] 평가 중 오류: {e}")
+                completed_count += 1
+                progress_bar.progress(completed_count / total)
     
     status_text.text("✅ 모든 인원의 특이사항 평가가 완료되었습니다.")
     st.success("일괄 평가 완료!")
