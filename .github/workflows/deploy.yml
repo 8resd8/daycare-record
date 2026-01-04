@@ -44,10 +44,10 @@ jobs:
             docker load < arisa-internal-tool.tar.gz
             
             # 기존 컨테이너 중지 및 제거
-            docker-compose -f docker-compose.prod.yml down || true
+            docker compose -f docker-compose.prod.yml down || true
             
             # 새 컨테이너 시작
-            docker-compose -f docker-compose.prod.yml up -d
+            docker compose -f docker-compose.prod.yml up -d
             
             # 이미지 파일 정리
             rm arisa-internal-tool.tar.gz
