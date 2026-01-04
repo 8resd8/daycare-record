@@ -5,10 +5,10 @@ services:
     image: arisa-internal-tool:latest
     container_name: arisa-streamlit-prod
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     volumes:
-      # 프로덕션 secrets 마운트
-      - /home/ubuntu/arisa/secrets.toml:/app/.streamlit/secrets.toml:ro
+      - ./secrets.toml:/app/.streamlit/secrets.toml:ro
+      - ./config.toml:/app/.streamlit/config.toml:ro
     environment:
       - PYTHONUNBUFFERED=1
     restart: always
