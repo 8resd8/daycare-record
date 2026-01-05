@@ -9,6 +9,7 @@ from .customer import CustomerRepository
 from .weekly_status import WeeklyStatusRepository
 from .daily_info import DailyInfoRepository
 from .ai_evaluation import AiEvaluationRepository
+from .employee_evaluation import EmployeeEvaluationRepository
 
 __all__ = [
     'BaseRepository',
@@ -16,4 +17,5 @@ __all__ = [
     'WeeklyStatusRepository',
     'DailyInfoRepository',
     'AiEvaluationRepository',
+    'EmployeeEvaluationRepository',
 ]
