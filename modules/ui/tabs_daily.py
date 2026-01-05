@@ -399,7 +399,7 @@ def render_ai_evaluation_tab():
             
             progress_bar.progress((i + 1) / total)
         
-        st.success("✅ 전체 특이사항 평가가 완료되었습니다!")
+        st.toast("전체 특이사항 평가가 완료되었습니다.", icon="✅")
         
         # 평가 결과를 세션 상태에 저장
         st.session_state.special_note_eval_results = eval_results
@@ -551,55 +551,69 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
     category_options = ['공통', '신체', '인지', '간호', '기능']
     evaluation_type_options = ['누락', '내용부족', '오타', '문법']
     
-    with st.form(key="employee_evaluation_form"):
-        col1, col2 = st.columns(2)
+    # record_id 미리 조회 (폼 외부에서 사용)
+    first_record = person_records[0]
+    customer_name = first_record.get('customer_name') or person_name
+    record_date = first_record.get('date')
+    record_id = evaluation_service.get_record_id(customer_name, record_date)
+    
+    # 입력 필드 (폼 외부)
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        selected_target = st.selectbox(
+            "평가 대상",
+            options=writer_list,
+            index=0,
+            key="emp_eval_target"
+        )
+        selected_category = st.selectbox(
+            "카테고리",
+            options=category_options,
+            index=1,  # 기본값 "신체"
+            key="emp_eval_category"
+        )
+    
+    with col2:
+        selected_eval_type = st.selectbox(
+            "평가 유형",
+            options=evaluation_type_options,
+            index=0,  # 기본값 "누락"
+            key="emp_eval_type"
+        )
+        comment = st.text_area(
+            "코멘트 (선택사항)",
+            placeholder="평가에 대한 추가 코멘트를 입력하세요...",
+            height=68,
+            key="emp_eval_comment"
+        )
+    
+    # 되돌리기 버튼 표시 여부 확인 (저장 후 계속 표시)
+    show_undo = st.session_state.last_emp_eval_id is not None
+    undo_clicked = False
+    
+    # 버튼 레이아웃: 평가 저장(좌) - 수정(중) - 되돌리기(우)
+    btn_col1, btn_col2, btn_col3 = st.columns(3)
+    
+    with btn_col1:
+        save_clicked = st.button("평가 저장", type="primary", key="save_emp_eval")
+    
+    with btn_col2:
+        update_clicked = st.button("수정", key="update_emp_eval")
+    
+    with btn_col3:
+        if show_undo:
+            undo_clicked = st.button("↩️ 되돌리기", key="undo_emp_eval")
+    
+    # 평가 저장 처리
+    if save_clicked:
+        target_user_id = emp_eval_repo.get_user_id_by_name(selected_target)
         
-        with col1:
-            selected_target = st.selectbox(
-                "평가 대상",
-                options=writer_list,
-                index=0
-            )
-            selected_category = st.selectbox(
-                "카테고리",
-                options=category_options,
-                index=1  # 기본값 "신체"
-            )
-        
-        with col2:
-            selected_eval_type = st.selectbox(
-                "평가 유형",
-                options=evaluation_type_options,
-                index=0  # 기본값 "누락"
-            )
-            comment = st.text_area(
-                "코멘트 (선택사항)",
-                placeholder="평가에 대한 추가 코멘트를 입력하세요...",
-                height=68
-            )
-        
-        submitted = st.form_submit_button("평가 저장", type="primary")
-        
-        if submitted:
-            # 평가 대상 user_id 조회
-            target_user_id = emp_eval_repo.get_user_id_by_name(selected_target)
-            
-            if not target_user_id:
-                st.error(f"'{selected_target}' 직원을 DB에서 찾을 수 없습니다.")
-                return
-            
-            # record_id 조회 (첫 번째 레코드 기준)
-            first_record = person_records[0]
-            customer_name = first_record.get('customer_name') or person_name
-            record_date = first_record.get('date')
-            
-            record_id = evaluation_service.get_record_id(customer_name, record_date)
-            
-            if not record_id:
-                st.error("해당 기록의 record_id를 찾을 수 없습니다.")
-                return
-            
-            # 평가 저장
+        if not target_user_id:
+            st.error(f"'{selected_target}' 직원을 DB에서 찾을 수 없습니다.")
+        elif not record_id:
+            st.error("해당 기록의 record_id를 찾을 수 없습니다.")
+        else:
             try:
                 emp_eval_id = emp_eval_repo.save_evaluation(
                     record_id=record_id,
@@ -607,32 +621,68 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
                     category=selected_category,
                     evaluation_type=selected_eval_type,
                     evaluation_date=date.today(),
-                    evaluator_user_id=1,  # 추후 동적 변경
-                    score=1,  # 기본값 1 고정
+                    evaluator_user_id=1,
+                    score=1,
                     comment=comment if comment.strip() else None
                 )
-                # 세션에 저장된 ID와 시간 기록
                 st.session_state.last_emp_eval_id = emp_eval_id
                 st.session_state.emp_eval_save_time = time.time()
-                st.toast("평가가 저장되었습니다.", icon="✅")
+                st.session_state.emp_eval_toast_msg = "saved"
+                st.rerun()
             except Exception as e:
                 st.error(f"평가 저장 중 오류가 발생했습니다: {str(e)}")
     
-    # 되돌리기 버튼 (10초 이내에만 표시)
-    if st.session_state.last_emp_eval_id and st.session_state.emp_eval_save_time:
-        elapsed = time.time() - st.session_state.emp_eval_save_time
-        if elapsed < 10:
-            remaining = int(10 - elapsed)
-            if st.button(f"↩️ 되돌리기 ({remaining}초)", key="undo_emp_eval"):
+    # 수정 처리
+    if update_clicked:
+        target_user_id = emp_eval_repo.get_user_id_by_name(selected_target)
+        
+        if not target_user_id:
+            st.error(f"'{selected_target}' 직원을 DB에서 찾을 수 없습니다.")
+        elif not record_id:
+            st.error("해당 기록의 record_id를 찾을 수 없습니다.")
+        else:
+            # 기존 평가 조회
+            existing_id = emp_eval_repo.find_existing_evaluation(
+                record_id, target_user_id, selected_category, selected_eval_type
+            )
+            
+            if existing_id:
                 try:
-                    emp_eval_repo.delete_evaluation(st.session_state.last_emp_eval_id)
-                    st.session_state.last_emp_eval_id = None
-                    st.session_state.emp_eval_save_time = None
-                    st.toast("저장이 취소되었습니다.", icon="↩️")
+                    emp_eval_repo.update_evaluation(
+                        emp_eval_id=existing_id,
+                        evaluation_date=date.today(),
+                        evaluator_user_id=1,
+                        score=1,
+                        comment=comment if comment.strip() else None
+                    )
+                    st.session_state.emp_eval_toast_msg = "updated"
                     st.rerun()
                 except Exception as e:
-                    st.error(f"되돌리기 중 오류가 발생했습니다: {str(e)}")
-        else:
-            # 10초 경과 시 세션 상태 초기화
+                    st.error(f"평가 수정 중 오류가 발생했습니다: {str(e)}")
+            else:
+                st.session_state.emp_eval_toast_msg = "no_update"
+                st.rerun()
+    
+    # 되돌리기 처리
+    if show_undo and undo_clicked:
+        try:
+            emp_eval_repo.delete_evaluation(st.session_state.last_emp_eval_id)
             st.session_state.last_emp_eval_id = None
             st.session_state.emp_eval_save_time = None
+            st.session_state.emp_eval_toast_msg = "undone"
+            st.rerun()
+        except Exception as e:
+            st.error(f"되돌리기 중 오류가 발생했습니다: {str(e)}")
+    
+    # Toast 메시지 표시 (rerun 후 표시)
+    if st.session_state.get('emp_eval_toast_msg'):
+        msg = st.session_state.emp_eval_toast_msg
+        st.session_state.emp_eval_toast_msg = None
+        if msg == "saved":
+            st.toast("평가가 저장되었습니다.", icon="✅")
+        elif msg == "updated":
+            st.toast("평가가 수정되었습니다.", icon="✏️")
+        elif msg == "undone":
+            st.toast("저장이 취소되었습니다.", icon="↩️")
+        elif msg == "no_update":
+            st.toast("수정할 기존 평가가 없습니다.", icon="⚠️")
