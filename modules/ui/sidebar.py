@@ -127,7 +127,7 @@ def render_sidebar():
                                help="전체 인원의 주간 상태변화 기록지를 일괄 생성합니다"):
                         _batch_generate_weekly_reports(person_entries)
                 with col2:
-                    if st.button("데일리 특이사항 평가",
+                    if st.button("일일 특이사항 평가",
                                use_container_width=True,
                                help="전체 인원의 특이사항을 일괄 평가합니다"):
                         _batch_evaluate_all_optimized(person_entries)
