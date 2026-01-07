@@ -1,5 +1,3 @@
-"""Daily info repository for database operations."""
-
 from typing import List, Dict, Optional
 from modules.db_connection import db_transaction
 from .base import BaseRepository

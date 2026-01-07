@@ -1,5 +1,3 @@
-"""Customer repository for database operations."""
-
 from typing import List, Optional, Dict
 from .base import BaseRepository
 

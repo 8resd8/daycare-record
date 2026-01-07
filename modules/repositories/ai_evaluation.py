@@ -1,12 +1,9 @@
-"""AI evaluation repository for database operations."""
-
 from typing import Dict, Optional
 from .base import BaseRepository
 
 
 class AiEvaluationRepository(BaseRepository):
-    """Repository for AI evaluation operations."""
-    
+
     def save_evaluation(self, record_id: int, category: str, 
                        oer_fidelity: str, specificity_score: str, grammar_score: str,
                        grade_code: str, original_text: str, reason_text: str = None,

@@ -1,5 +1,3 @@
-"""Base repository class providing common database operations."""
-
 from typing import Dict, List, Optional, Any
 from modules.db_connection import db_query, db_transaction
 

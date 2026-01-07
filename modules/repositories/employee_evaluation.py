@@ -1,5 +1,3 @@
-"""Employee evaluation repository for database operations."""
-
 from typing import Dict, List, Optional
 from datetime import date
 from .base import BaseRepository

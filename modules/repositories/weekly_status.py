@@ -1,5 +1,3 @@
-"""Weekly status repository for database operations."""
-
 from typing import Optional
 from .base import BaseRepository
 
