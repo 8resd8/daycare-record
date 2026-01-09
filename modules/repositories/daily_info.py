@@ -142,50 +142,63 @@ class DailyInfoRepository(BaseRepository):
                 record.get("writer_func")
             ))
     
-    def save_parsed_data(self, records: List[Dict]) -> int:
-        """Save parsed daily data in a single transaction."""
-        saved_count = 0
+    def save_parsed_data(self, records: List[Dict], batch_size: int = 20) -> int:
+        """Save parsed daily data in batched transactions to avoid packet size limits.
         
-        with db_transaction() as cursor:
-            for record in records:
-                # 고객 확인 또는 생성
-                customer_id = self._get_or_create_customer_in_transaction(
-                    cursor, record
-                )
-                record["customer_id"] = customer_id
-                
-                # 기존 레코드 확인
-                cursor.execute(
-                    "SELECT record_id FROM daily_infos WHERE customer_id=%s AND date=%s",
-                    (customer_id, record["date"])
-                )
-                existing = cursor.fetchone()
-                
-                if existing:
-                    self._delete_daily_record_in_transaction(cursor, existing[0])
-                
-                # 새 레코드 삽입
-                cursor.execute("""
-                    INSERT INTO daily_infos (
-                        customer_id, date, start_time, end_time,
-                        total_service_time, transport_service, transport_vehicles
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    customer_id, record["date"],
-                    record.get("start_time"), record.get("end_time"),
-                    record.get("total_service_time"),
-                    record.get("transport_service"),
-                    record.get("transport_vehicles")
-                ))
-                record_id = cursor.lastrowid
-                
-                # 하위 레코드들 삽입
-                self._insert_physicals_in_transaction(cursor, record_id, record)
-                self._insert_cognitives_in_transaction(cursor, record_id, record)
-                self._insert_nursings_in_transaction(cursor, record_id, record)
-                self._insert_recoveries_in_transaction(cursor, record_id, record)
-                
-                saved_count += 1
+        Args:
+            records: List of parsed records to save
+            batch_size: Number of records to process per transaction (default: 20)
+        
+        Returns:
+            Total number of records saved
+        """
+        saved_count = 0
+        total_records = len(records)
+        
+        # 배치 단위로 처리
+        for i in range(0, total_records, batch_size):
+            batch = records[i:i + batch_size]
+            
+            with db_transaction() as cursor:
+                for record in batch:
+                    # 고객 확인 또는 생성
+                    customer_id = self._get_or_create_customer_in_transaction(
+                        cursor, record
+                    )
+                    record["customer_id"] = customer_id
+                    
+                    # 기존 레코드 확인
+                    cursor.execute(
+                        "SELECT record_id FROM daily_infos WHERE customer_id=%s AND date=%s",
+                        (customer_id, record["date"])
+                    )
+                    existing = cursor.fetchone()
+                    
+                    if existing:
+                        self._delete_daily_record_in_transaction(cursor, existing[0])
+                    
+                    # 새 레코드 삽입
+                    cursor.execute("""
+                        INSERT INTO daily_infos (
+                            customer_id, date, start_time, end_time,
+                            total_service_time, transport_service, transport_vehicles
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        customer_id, record["date"],
+                        record.get("start_time"), record.get("end_time"),
+                        record.get("total_service_time"),
+                        record.get("transport_service"),
+                        record.get("transport_vehicles")
+                    ))
+                    record_id = cursor.lastrowid
+                    
+                    # 하위 레코드들 삽입
+                    self._insert_physicals_in_transaction(cursor, record_id, record)
+                    self._insert_cognitives_in_transaction(cursor, record_id, record)
+                    self._insert_nursings_in_transaction(cursor, record_id, record)
+                    self._insert_recoveries_in_transaction(cursor, record_id, record)
+                    
+                    saved_count += 1
         
         return saved_count
     
