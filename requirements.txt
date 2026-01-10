@@ -17,3 +17,7 @@ mysql-connector-python==9.5.0
 
 # Utilities
 python-dateutil==2.9.0.post0
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
