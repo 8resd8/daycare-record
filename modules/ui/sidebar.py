@@ -1,5 +1,12 @@
-"""사이드바 UI 모듈 - 파일 업로드 및 선택"""
+"""사이드바 UI 모듈 - 파일 업로드 및 선택
 
+성능 최적화:
+- 파일 처리 후 즉시 메모리 해제
+- 캐시 무효화로 메모리 관리
+"""
+
+import gc
+import time
 import streamlit as st
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,7 +15,7 @@ from modules.database import save_parsed_data
 from modules.ui.ui_helpers import (
     get_active_doc, get_person_keys_for_doc, iter_person_entries, 
     ensure_active_person, person_checkbox_key, select_person,
-    get_person_done, set_person_done
+    get_person_done, set_person_done, invalidate_person_cache
 )
 
 
@@ -50,9 +57,44 @@ def render_sidebar():
 
                 if not exists:
                     try:
-                        with st.spinner(f"PDF 정밀 분석 중... ({f.name})"):
-                            parser = CareRecordParser(f)
+                        # 파싱 시작 시간 기록
+                        start_time = time.time()
+                        status_placeholder = st.empty()
+                        
+                        # 백그라운드에서 파싱 실행
+                        from concurrent.futures import ThreadPoolExecutor, wait
+                        import threading
+                        
+                        parser = CareRecordParser(f)
+                        parsed = None
+                        parsing_done = threading.Event()
+                        
+                        def do_parse():
+                            nonlocal parsed
                             parsed = parser.parse()
+                            parsing_done.set()
+                        
+                        with ThreadPoolExecutor(max_workers=1) as executor:
+                            future = executor.submit(do_parse)
+                            
+                            # 실시간 경과 시간 표시
+                            while not parsing_done.is_set():
+                                elapsed = time.time() - start_time
+                                status_placeholder.info(f"📄 {f.name} 파싱 중... ({elapsed:.1f}초)")
+                                time.sleep(0.5)
+                            
+                            future.result()  # 예외 발생 시 전파
+                        
+                        # 파싱 완료 시간 계산
+                        elapsed_time = time.time() - start_time
+                        total_records = len(parsed)
+                        
+                        # 완료 메시지 표시
+                        status_placeholder.empty()
+                        
+                        # 파싱 후 파서 객체 해제
+                        del parser
+                        gc.collect()
 
                         new_doc = {
                             "id": file_id,
@@ -63,7 +105,10 @@ def render_sidebar():
                             "error": None,
                         }
                         st.session_state.docs.append(new_doc)
-                        newly_added_id = file_id # 새로 추가된 파일 ID 기억
+                        newly_added_id = file_id # 새로 추가된 파일 ID 기记忆
+                        
+                        # 파싱 완료 메시지를 session_state에 저장
+                        st.session_state.parsing_success = f"{total_records}건 데이터 조회 ({elapsed_time:.1f}초)"
 
                     except Exception as e:
                         st.error(f"{f.name} 처리 중 오류: {e}")
@@ -80,6 +125,11 @@ def render_sidebar():
                 st.session_state.active_doc_id = newly_added_id
                 st.session_state.active_person_key = None
                 st.rerun()
+
+        # 파싱 완료 메시지 표시
+        if 'parsing_success' in st.session_state:
+            st.success(st.session_state.parsing_success)
+            del st.session_state.parsing_success
 
         st.divider()
 
@@ -100,7 +150,7 @@ def render_sidebar():
                     with st.spinner("DB 자동 저장 중..."):
                         count = save_parsed_data(active_doc["parsed_data"])
                         if count > 0:
-                            st.success(f"✅ {count}건의 기록이 자동 저장되었습니다.")
+                            st.toast(f"{count}건의 기록이 자동 저장되었습니다.", icon="✅")
                             # Mark as saved
                             for doc in st.session_state.docs:
                                 if doc["id"] == active_doc["id"]:
@@ -134,37 +184,52 @@ def render_sidebar():
                                help="전체 인원의 특이사항을 일괄 평가합니다"):
                         _batch_evaluate_all_optimized(person_entries)
 
-            person_entries = iter_person_entries()
-            person_count = len(person_entries)
-            st.subheader(f"👥 전체 {person_count}명")
-            if not person_entries:
-                st.info("파싱된 인원이 없습니다.")
-            else:
-                st.caption("이름을 선택하면 상세 기록이 표시됩니다.")
-                active_person_key = ensure_active_person()
-                for entry in person_entries:
-                    is_active = entry["key"] == active_person_key
-                    cols = st.columns([0.75, 0.25])
-                    display_label = f"{entry['person_name']} · {entry['record_count']}건"
-                    button_type = "primary" if is_active else "secondary"
-                    with cols[0]:
-                        if st.button(
-                            display_label,
-                            key=f"person_btn_{entry['key']}",
-                            type=button_type,
-                            use_container_width=True
-                        ):
-                            select_person(entry["key"], entry["doc_id"])
-                            st.rerun()
-                    with cols[1]:
-                        done_value = st.checkbox(
-                            "완료",
-                            value=get_person_done(entry["key"]),
-                            key=f"done_{entry['key']}"
-                        )
-                        set_person_done(entry["key"], done_value)
+            # 프래그먼트로 사람 목록 렌더링 (부분 리렌더링 최적화)
+            _render_person_list_fragment()
         else:
             st.info("좌측 상단에서 PDF 파일을 업로드해주세요.")
+
+
+@st.fragment
+def _render_person_list_fragment():
+    """사람 목록 렌더링 (프래그먼트로 부분 리렌더링 최적화)
+    
+    @st.fragment: 이 컴포넌트만 독립적으로 리렌더링되어 전체 페이지 새로고침 방지
+    """
+    person_entries = iter_person_entries()
+    person_count = len(person_entries)
+    st.subheader(f"👥 전체 {person_count}명")
+    
+    if not person_entries:
+        st.info("파싱된 인원이 없습니다.")
+        return
+    
+    st.caption("이름을 선택하면 상세 기록이 표시됩니다.")
+    active_person_key = ensure_active_person()
+    
+    for entry in person_entries:
+        is_active = entry["key"] == active_person_key
+        cols = st.columns([0.75, 0.25])
+        display_label = f"{entry['person_name']} · {entry['record_count']}건"
+        button_type = "primary" if is_active else "secondary"
+        
+        with cols[0]:
+            if st.button(
+                display_label,
+                key=f"person_btn_{entry['key']}",
+                type=button_type,
+                use_container_width=True
+            ):
+                select_person(entry["key"], entry["doc_id"])
+                st.rerun()
+        
+        with cols[1]:
+            done_value = st.checkbox(
+                "완료",
+                value=get_person_done(entry["key"]),
+                key=f"done_{entry['key']}"
+            )
+            set_person_done(entry["key"], done_value)
 
 
 def _batch_generate_weekly_reports(person_entries):
@@ -178,7 +243,7 @@ def _batch_generate_weekly_reports(person_entries):
     total = len(person_entries)
     
     for i, entry in enumerate(person_entries):
-        status_text.text(f"{entry['person_name']} 처리 중... ({i+1}/{total})")
+        status_text.text(f"{entry['person_name']} 진행중 ({i+1}/{total})")
         
         # Get person records
         doc = next((d for d in st.session_state.docs if d["id"] == entry["doc_id"]), None)
@@ -249,7 +314,7 @@ def _batch_generate_weekly_reports(person_entries):
         progress_bar.progress((i + 1) / total)
     
     status_text.text("✅ 모든 인원의 주간 상태변화 기록지 생성이 완료되었습니다.")
-    st.success("일괄 처리 완료!")
+    st.toast("✅ 일괄 처리 완료!", icon="✅")
 
 
 def _batch_evaluate_all(person_entries):
@@ -263,7 +328,7 @@ def _batch_evaluate_all(person_entries):
     total = len(person_entries)
     
     for i, entry in enumerate(person_entries):
-        status_text.text(f"{entry['person_name']} 평가 중... ({i+1}/{total})")
+        status_text.text(f"{entry['person_name']} 진행중 ({i+1}/{total})")
         
         # Get person records from database
         try:
@@ -350,7 +415,7 @@ def _batch_evaluate_all(person_entries):
         progress_bar.progress((i + 1) / total)
     
     status_text.text("✅ 모든 인원의 특이사항 평가가 완료되었습니다.")
-    st.success("일괄 평가 완료!")
+    st.toast("✅ 일괄 평가 완료!", icon="✅")
     st.rerun()
 
 
@@ -490,7 +555,7 @@ def _batch_evaluate_all_optimized(person_entries):
     
     # ThreadPoolExecutor로 병렬 처리
     completed_count = 0
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         # 각 사람의 데이터를 별도 태스크로 제출
         futures = []
         for entry in person_entries:
@@ -503,18 +568,17 @@ def _batch_evaluate_all_optimized(person_entries):
         # 완료된 태스크 처리
         for idx, (future, person_name) in enumerate(futures):
             # 평가 시작 표시
-            status_text.text(f"🔍 [{person_name}] 평가 중... ({idx + 1}/{total})")
+            status_text.text(f"{person_name} 진행중 ({idx + 1}/{total})")
             
             try:
                 future.result()
                 completed_count += 1
                 progress_bar.progress(completed_count / total)
-                status_text.text(f"✅ [{person_name}] 평가 완료 ({completed_count}/{total})")
             except Exception as e:
-                st.error(f"❌ [{person_name}] 평가 중 오류: {e}")
+                st.error(f"❌ {person_name} 평가 중 오류: {e}")
                 completed_count += 1
                 progress_bar.progress(completed_count / total)
     
     status_text.text("✅ 모든 인원의 특이사항 평가가 완료되었습니다.")
-    st.success("일괄 평가 완료!")
+    st.toast("✅ 일괄 평가 완료!", icon="✅")
     st.rerun()

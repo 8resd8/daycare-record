@@ -1,6 +1,7 @@
 import pdfplumber
 import re
 import os
+import gc
 
 class CareRecordParser:
     STATUS_DONE = "완료"
@@ -87,16 +88,19 @@ class CareRecordParser:
         return best
 
     def parse(self):
+        """PDF 파싱
+        - 그룹별 즉시 GC 호출 (5그룹마다)
+        - 페이지 처리 후 즉시 참조 해제
+        """
         final_records = []
-
+        customer_appendix_notes = {}
+        
         with pdfplumber.open(self.pdf_file) as pdf:
             pages = pdf.pages
             page_groups = self._split_page_groups(pages)
-            
-            # Customer-level appendix notes accumulation
-            customer_appendix_notes = {}
+            total_groups = len(page_groups)
 
-            for group_pages in page_groups:
+            for group_idx, group_pages in enumerate(page_groups):
                 if not group_pages:
                     continue
 
@@ -124,26 +128,43 @@ class CareRecordParser:
 
                 self._merge_appendix_to_main()
                 final_records.extend(self.parsed_data)
+                
+                # 그룹 처리 후 메모리 해제 (5그룹마다 또는 마지막)
+                self.parsed_data = []
+                self.appendix_notes = {}
+                if (group_idx + 1) % 5 == 0 or group_idx == total_groups - 1:
+                    gc.collect()
             
             # Final pass: merge all customer appendix notes
             self._merge_all_customer_appendices(final_records, customer_appendix_notes)
+            
+            # 최종 메모리 정리
+            del customer_appendix_notes
+            gc.collect()
 
         self.parsed_data = final_records
         return self.parsed_data
 
     def _split_page_groups(self, pages):
-        """한 PDF 안에 여러 수급자 기록지가 연속으로 존재하는 경우 그룹을 분리"""
+        """한 PDF 안에 여러 수급자 기록지가 연속으로 존재하는 경우 그룹을 분리
+        
+        메모리 최적화: 페이지 텍스트 추출 후 즉시 해제
+        """
         if not pages:
             return []
 
         groups = []
         current_group = []
+        # 페이지 인덱스 기반 그룹화 (페이지 객체 직접 저장)
+        page_texts_cache = {}  # 페이지 텍스트 캐싱
 
-        for page in pages:
+        for page_idx, page in enumerate(pages):
             try:
                 text = page.extract_text() or ""
+                page_texts_cache[page_idx] = text  # 캐시 저장
             except Exception:
                 text = ""
+                page_texts_cache[page_idx] = ""
 
             normalized = text.replace(" ", "")
             is_header = (
@@ -159,11 +180,9 @@ class CareRecordParser:
                     is_appendix_page = True
             
             # Also check if this page contains a customer name without being a header
-            # This helps keep appendix pages with their main records
             has_customer_name = bool(re.search(r"수급자명\s+([^\s]+)", text))
             
             # If it's a new header OR has a different customer name, start a new group
-            # But DON'T start a new group if it's an appendix page
             should_start_new_group = is_header
             if current_group and has_customer_name and not is_appendix_page:
                 # Check if this is the same customer as current group
@@ -185,6 +204,9 @@ class CareRecordParser:
 
         if current_group:
             groups.append(current_group)
+        
+        # 텍스트 캐시 정리
+        del page_texts_cache
 
         # 헤더를 찾지 못한 경우 전체 페이지를 하나의 그룹으로 반환
         return groups or [list(pages)]

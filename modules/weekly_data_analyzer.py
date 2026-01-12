@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -7,8 +8,36 @@ from statistics import mean
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+import numpy as np
 
+import json
 from modules.repositories import WeeklyStatusRepository, DailyInfoRepository
+
+
+def _optimize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """메모리 최적화된 DataFrame 반환
+
+    - 문자열 컨럼을 category 타입으로 변환
+    - 숫자 컨럼을 작은 dtype으로 변환
+    """
+    if df.empty:
+        return df
+    
+    # 문자열 컨럼을 category로 변환 (중복이 많은 컨럼)
+    category_candidates = [
+        'meal_type', 'total_service_time', 'transport_service',
+        'hygiene_care', 'mobility_care', 'cog_support', 'comm_support',
+        'health_manage', 'nursing_manage', 'emergency',
+        'prog_basic', 'prog_activity', 'prog_cognitive', 'prog_therapy'
+    ]
+    
+    for col in category_candidates:
+        if col in df.columns and df[col].dtype == 'object':
+            # unique 값이 적으면 category로 변환
+            if df[col].nunique() < len(df) * 0.5:
+                df[col] = df[col].astype('category')
+    
+    return df
 
 POSITIVE_KEYWORDS = ["개선", "안정", "호전", "유지", "활발", "양호", "미흡하지않음"]
 NEGATIVE_KEYWORDS = ["악화", "저하", "불안", "통증", "문제", "감소", "주의", "거부", "통증"]
@@ -90,12 +119,29 @@ def _fetch_two_week_records(
     return transformed_records, (prev_start, prev_end), (start_date, curr_end)
 
 
-def compute_weekly_status(customer_name: str, week_start_str: str, customer_id: int) -> Dict:
+def compute_weekly_status(customer_name: str, week_start_str: str, customer_id: int, 
+                          use_cache: bool = True) -> Dict:
+    """주간 상태 분석 (DB 캐싱 지원)
+    
+    Args:
+        customer_name: 고객명
+        week_start_str: 주 시작일 (YYYY-MM-DD)
+        customer_id: 고객 ID
+        use_cache: 캐시 사용 여부 (기본값: True)
+    """
     try:
         week_start = datetime.strptime(week_start_str, "%Y-%m-%d").date()
         aligned_start = week_start - timedelta(days=week_start.weekday())
     except Exception:
         return {"error": "날짜 형식이 올바르지 않습니다."}
+    
+    curr_end = aligned_start + timedelta(days=6)
+    
+    # 캐시 확인 (use_cache=True일 때)
+    if use_cache and customer_id:
+        cached = _load_cached_weekly_status(customer_id, aligned_start, curr_end)
+        if cached:
+            return cached
 
     try:
         rows, prev_range, curr_range = _fetch_two_week_records(customer_name, aligned_start)
@@ -145,12 +191,68 @@ def compute_weekly_status(customer_name: str, week_start_str: str, customer_id: 
 
     trend = analyze_weekly_trend(rows, prev_range, curr_range, customer_id)
 
-    return {
+    result = {
         "ranges": (prev_range, curr_range),
         "scores": scores,
         "raw": rows,
         "trend": trend,
     }
+    
+    # 결과 캐싱 (customer_id가 있을 때만)
+    if customer_id:
+        _save_weekly_status_cache(customer_id, aligned_start, curr_end, result)
+    
+    return result
+
+
+def _load_cached_weekly_status(customer_id: int, start_date: date, end_date: date) -> Optional[Dict]:
+    """캐시된 주간 분석 결과 로드"""
+    try:
+        repo = WeeklyStatusRepository()
+        cached_text = repo.load_weekly_status(customer_id, start_date, end_date)
+        if cached_text:
+            cached = json.loads(cached_text)
+            # ranges를 date 객체로 복원
+            if 'ranges' in cached:
+                prev_range, curr_range = cached['ranges']
+                cached['ranges'] = (
+                    (datetime.strptime(prev_range[0], '%Y-%m-%d').date(),
+                     datetime.strptime(prev_range[1], '%Y-%m-%d').date()),
+                    (datetime.strptime(curr_range[0], '%Y-%m-%d').date(),
+                     datetime.strptime(curr_range[1], '%Y-%m-%d').date())
+                )
+            # raw의 date도 복원
+            if 'raw' in cached:
+                for row in cached['raw']:
+                    if 'date' in row and isinstance(row['date'], str):
+                        row['date'] = datetime.strptime(row['date'], '%Y-%m-%d').date()
+            return cached
+    except Exception:
+        pass
+    return None
+
+
+def _save_weekly_status_cache(customer_id: int, start_date: date, end_date: date, result: Dict):
+    """주간 분석 결과 캐싱"""
+    try:
+        # JSON 직렬화를 위해 date 객체 변환
+        cache_data = result.copy()
+        if 'ranges' in cache_data:
+            prev_range, curr_range = cache_data['ranges']
+            cache_data['ranges'] = (
+                (prev_range[0].isoformat(), prev_range[1].isoformat()),
+                (curr_range[0].isoformat(), curr_range[1].isoformat())
+            )
+        if 'raw' in cache_data:
+            cache_data['raw'] = [
+                {**row, 'date': row['date'].isoformat() if hasattr(row.get('date'), 'isoformat') else row.get('date')}
+                for row in cache_data['raw']
+            ]
+        
+        repo = WeeklyStatusRepository()
+        repo.save_weekly_status(customer_id, start_date, end_date, json.dumps(cache_data, ensure_ascii=False))
+    except Exception:
+        pass  # 캐시 저장 실패는 무시
 
 
 def _detect_meal_type(text: Optional[str]) -> Optional[str]:
@@ -210,11 +312,13 @@ def _parse_toilet_breakdown(text: Optional[str]) -> Dict[str, float]:
 
 
 def _summarize_meal_details(df: pd.DataFrame) -> str:
+    """itertuples() 사용으로 성능 최적화"""
     if df.empty:
         return "-"
     details = []
-    for _, row in df.sort_values("date").iterrows():
-        detail = row.get("meal_detail")
+    sorted_df = df.sort_values("date")
+    for row in sorted_df.itertuples(index=False):
+        detail = getattr(row, 'meal_detail', None)
         if detail:
             details.append(detail)
     return " / ".join(details) if details else "-"
@@ -237,20 +341,28 @@ def _summarize_toilet_summary(df: pd.DataFrame) -> str:
 
 
 def _merge_notes(df: pd.DataFrame, highlight: bool = False) -> List[str]:
+    """itertuples() 사용으로 성능 최적화"""
     notes = []
-    for _, row in df.iterrows():
+    # itertuples()는 iterrows()보다 10배 이상 빠름
+    for row in df.itertuples(index=False):
         parts = []
-        if row.get("physical_note"):
-            parts.append(f"신체: {row['physical_note']}")
-        if row.get("cognitive_note"):
-            parts.append(f"인지: {row['cognitive_note']}")
-        if row.get("nursing_note"):
-            parts.append(f"간호: {row['nursing_note']}")
-        if row.get("functional_note"):
-            parts.append(f"기능: {row['functional_note']}")
+        physical_note = getattr(row, 'physical_note', None)
+        cognitive_note = getattr(row, 'cognitive_note', None)
+        nursing_note = getattr(row, 'nursing_note', None)
+        functional_note = getattr(row, 'functional_note', None)
+        row_date = getattr(row, 'date', None)
+        
+        if physical_note:
+            parts.append(f"신체: {physical_note}")
+        if cognitive_note:
+            parts.append(f"인지: {cognitive_note}")
+        if nursing_note:
+            parts.append(f"간호: {nursing_note}")
+        if functional_note:
+            parts.append(f"기능: {functional_note}")
         if not parts:
             continue
-        line = f"[{row['date'].strftime('%m-%d')}] " + " / ".join(parts)
+        line = f"[{row_date.strftime('%m-%d')}] " + " / ".join(parts)
         if highlight:
             for kw in HIGHLIGHT_KEYWORDS:
                 if kw in line:
@@ -264,12 +376,16 @@ def _merge_notes(df: pd.DataFrame, highlight: bool = False) -> List[str]:
 def analyze_weekly_trend(
     rows: List[Dict], prev_range: Tuple[date, date], curr_range: Tuple[date, date], customer_id: int
 ) -> Dict:
+    """DataFrame 최적화 버전 - 메모리 효율화"""
     if not rows:
         return {}
     df = pd.DataFrame(rows)
     if df.empty:
         return {}
     df["date"] = pd.to_datetime(df["date"]).dt.date
+    
+    # 메모리 최적화: category 타입 적용
+    df = _optimize_dataframe(df)
 
     def _derive(row):
         meals = [row.get("meal_breakfast"), row.get("meal_lunch"), row.get("meal_dinner")]

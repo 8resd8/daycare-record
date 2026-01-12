@@ -1,5 +1,6 @@
-from typing import List, Dict, Optional
-from modules.db_connection import db_transaction
+from typing import List, Dict, Optional, Iterator, Generator
+import gc
+from modules.db_connection import db_transaction, db_query
 from .base import BaseRepository
 
 
@@ -142,63 +143,179 @@ class DailyInfoRepository(BaseRepository):
                 record.get("writer_func")
             ))
     
-    def save_parsed_data(self, records: List[Dict], batch_size: int = 20) -> int:
+    def save_parsed_data(self, records: List[Dict], batch_size: int = None) -> int:
         """Save parsed daily data in batched transactions to avoid packet size limits.
+        
+        성능 최적화:
+        - 고객명 일괄 조회로 N+1 쿼리 방지
+        - 기존 레코드 일괄 조회
+        - 청크 단위 메모리 해제
+        - 동적 배치 크기 조정
         
         Args:
             records: List of parsed records to save
-            batch_size: Number of records to process per transaction (default: 20)
+            batch_size: Number of records to process per transaction 
+                       (None이면 레코드 수에 따라 자동 조정)
         
         Returns:
             Total number of records saved
         """
+        if not records:
+            return 0
+            
         saved_count = 0
         total_records = len(records)
         
-        # 배치 단위로 처리
+        # 동적 배치 크기 조정
+        if batch_size is None:
+            if total_records < 50:
+                batch_size = 5   # 소량: 빠른 처리
+            elif total_records < 200:
+                batch_size = 10  # 중량: 균형
+            else:
+                batch_size = 15  # 대량: 트랜잭션 효율
+        
+        # 1단계: 모든 고객명 수집 및 일괄 조회/생성
+        customer_names = list(set(r.get("customer_name") for r in records if r.get("customer_name")))
+        customer_map = self._bulk_get_or_create_customers(records, customer_names)
+        
+        # 2단계: 기존 레코드 일괄 조회
+        existing_records = self._bulk_find_existing_records(customer_map, records)
+        
+        # 3단계: 배치 단위로 처리 (메모리 최적화)
         for i in range(0, total_records, batch_size):
             batch = records[i:i + batch_size]
+            saved_count += self._process_batch(
+                batch, customer_map, existing_records
+            )
             
-            with db_transaction() as cursor:
-                for record in batch:
-                    # 고객 확인 또는 생성
-                    customer_id = self._get_or_create_customer_in_transaction(
-                        cursor, record
-                    )
-                    record["customer_id"] = customer_id
+            # 배치별 메모리 해제
+            if i > 0 and i % (batch_size * 5) == 0:
+                gc.collect()
+        
+        # 최종 메모리 정리
+        del customer_map, existing_records
+        gc.collect()
+        
+        return saved_count
+    
+    def _bulk_get_or_create_customers(self, records: List[Dict], customer_names: List[str]) -> Dict[str, int]:
+        """고객 일괄 조회/생성"""
+        if not customer_names:
+            return {}
+            
+        customer_map = {}
+        
+        with db_transaction() as cursor:
+            # 기존 고객 일괄 조회
+            placeholders = ', '.join(['%s'] * len(customer_names))
+            cursor.execute(
+                f"SELECT customer_id, name FROM customers WHERE name IN ({placeholders})",
+                customer_names
+            )
+            for row in cursor.fetchall():
+                customer_map[row[1]] = row[0]
+            
+            # 신규 고객 생성
+            for record in records:
+                name = record.get("customer_name")
+                if not name or name in customer_map:
+                    continue
                     
-                    # 기존 레코드 확인
-                    cursor.execute(
-                        "SELECT record_id FROM daily_infos WHERE customer_id=%s AND date=%s",
-                        (customer_id, record["date"])
-                    )
-                    existing = cursor.fetchone()
-                    
-                    if existing:
-                        self._delete_daily_record_in_transaction(cursor, existing[0])
-                    
-                    # 새 레코드 삽입
-                    cursor.execute("""
-                        INSERT INTO daily_infos (
-                            customer_id, date, start_time, end_time,
-                            total_service_time, transport_service, transport_vehicles
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        customer_id, record["date"],
-                        record.get("start_time"), record.get("end_time"),
-                        record.get("total_service_time"),
-                        record.get("transport_service"),
-                        record.get("transport_vehicles")
-                    ))
-                    record_id = cursor.lastrowid
-                    
-                    # 하위 레코드들 삽입
-                    self._insert_physicals_in_transaction(cursor, record_id, record)
-                    self._insert_cognitives_in_transaction(cursor, record_id, record)
-                    self._insert_nursings_in_transaction(cursor, record_id, record)
-                    self._insert_recoveries_in_transaction(cursor, record_id, record)
-                    
-                    saved_count += 1
+                cursor.execute("""
+                    INSERT INTO customers (name, birth_date, grade, recognition_no)
+                    VALUES (%s, %s, %s, %s)
+                """, (
+                    name,
+                    record.get("customer_birth_date"),
+                    record.get("customer_grade"),
+                    record.get("customer_recognition_no")
+                ))
+                customer_map[name] = cursor.lastrowid
+        
+        return customer_map
+    
+    def _bulk_find_existing_records(self, customer_map: Dict[str, int], records: List[Dict]) -> Dict[tuple, int]:
+        """기존 레코드 일괄 조회"""
+        existing = {}
+        
+        if not customer_map:
+            return existing
+            
+        # (customer_id, date) 쌍 수집
+        lookup_pairs = []
+        for record in records:
+            name = record.get("customer_name")
+            if name in customer_map:
+                lookup_pairs.append((customer_map[name], record["date"]))
+        
+        if not lookup_pairs:
+            return existing
+        
+        # 청크 단위로 조회 (SQL IN 절 제한 방지)
+        chunk_size = 100
+        for i in range(0, len(lookup_pairs), chunk_size):
+            chunk = lookup_pairs[i:i + chunk_size]
+            
+            with db_query() as cursor:
+                conditions = " OR ".join(
+                    ["(customer_id=%s AND date=%s)"] * len(chunk)
+                )
+                params = []
+                for cid, dt in chunk:
+                    params.extend([cid, dt])
+                
+                cursor.execute(
+                    f"SELECT record_id, customer_id, date FROM daily_infos WHERE {conditions}",
+                    params
+                )
+                for row in cursor.fetchall():
+                    existing[(row['customer_id'], str(row['date']))] = row['record_id']
+        
+        return existing
+    
+    def _process_batch(self, batch: List[Dict], customer_map: Dict[str, int], 
+                       existing_records: Dict[tuple, int]) -> int:
+        """배치 처리 - 단일 트랜잭션에서 벨크 삽입"""
+        saved_count = 0
+        
+        with db_transaction() as cursor:
+            for record in batch:
+                name = record.get("customer_name")
+                customer_id = customer_map.get(name)
+                if not customer_id:
+                    continue
+                
+                record["customer_id"] = customer_id
+                date_str = str(record["date"])
+                
+                # 기존 레코드 삭제
+                existing_id = existing_records.get((customer_id, date_str))
+                if existing_id:
+                    self._delete_daily_record_in_transaction(cursor, existing_id)
+                
+                # 새 레코드 삽입
+                cursor.execute("""
+                    INSERT INTO daily_infos (
+                        customer_id, date, start_time, end_time,
+                        total_service_time, transport_service, transport_vehicles
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    customer_id, record["date"],
+                    record.get("start_time"), record.get("end_time"),
+                    record.get("total_service_time"),
+                    record.get("transport_service"),
+                    record.get("transport_vehicles")
+                ))
+                record_id = cursor.lastrowid
+                
+                # 하위 레코드들 삽입
+                self._insert_physicals_in_transaction(cursor, record_id, record)
+                self._insert_cognitives_in_transaction(cursor, record_id, record)
+                self._insert_nursings_in_transaction(cursor, record_id, record)
+                self._insert_recoveries_in_transaction(cursor, record_id, record)
+                
+                saved_count += 1
         
         return saved_count
     
