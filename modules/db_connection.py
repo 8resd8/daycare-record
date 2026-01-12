@@ -80,10 +80,14 @@ def _get_connection_pool() -> pooling.MySQLConnectionPool:
             except:
                 pass
         
+        # 메모리 모드에 따른 동적 풀 크기 설정
+        from modules.utils.memory_utils import get_db_pool_size
+        pool_size = get_db_pool_size()
+        
         _pool_config = config.copy()
         _connection_pool = pooling.MySQLConnectionPool(
             pool_name="arisa_pool",
-            pool_size=5,
+            pool_size=pool_size,
             pool_reset_session=True,
             **config
         )

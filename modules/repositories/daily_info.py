@@ -166,14 +166,10 @@ class DailyInfoRepository(BaseRepository):
         saved_count = 0
         total_records = len(records)
         
-        # 동적 배치 크기 조정
+        # 동적 배치 크기 조정 (메모리 모드 기반)
         if batch_size is None:
-            if total_records < 50:
-                batch_size = 5   # 소량: 빠른 처리
-            elif total_records < 200:
-                batch_size = 10  # 중량: 균형
-            else:
-                batch_size = 15  # 대량: 트랜잭션 효율
+            from modules.utils.memory_utils import get_batch_size
+            batch_size = get_batch_size(total_records)
         
         # 1단계: 모든 고객명 수집 및 일괄 조회/생성
         customer_names = list(set(r.get("customer_name") for r in records if r.get("customer_name")))

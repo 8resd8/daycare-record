@@ -20,13 +20,15 @@ def get_active_doc():
     return None
 
 
-@st.cache_data(max_entries=10, ttl=600)
+# 동적 캐시 파라미터 적용
+from modules.utils.memory_utils import get_cache_params
+_cache_params = get_cache_params()
+
+@st.cache_data(max_entries=_cache_params["max_entries"], ttl=_cache_params["ttl"])
 def get_person_keys_for_doc(doc_id: str, parsed_data_len: int) -> list:
     """문서에서 사람 키 목록을 반환합니다.
     
-    캐시 파라미터:
-    - max_entries=10: 최대 10개 문서 캐시
-    - ttl=600: 10분 후 캐시 만료
+    캐시 파라미터는 메모리 모드에 따라 동적 조정됩니다.
     """
     # session_state에서 실제 doc 가져오기
     doc = next((d for d in st.session_state.docs if d.get("id") == doc_id), None)

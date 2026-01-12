@@ -553,9 +553,10 @@ def _batch_evaluate_all_optimized(person_entries):
         
         return results
     
-    # ThreadPoolExecutor로 병렬 처리
+    # ThreadPoolExecutor로 병렬 처리 (메모리 모드에 따라 동적 조정)
+    from modules.utils.memory_utils import get_thread_max_workers
     completed_count = 0
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=get_thread_max_workers()) as executor:
         # 각 사람의 데이터를 별도 태스크로 제출
         futures = []
         for entry in person_entries:

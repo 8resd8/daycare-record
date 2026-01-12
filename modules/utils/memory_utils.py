@@ -1,24 +1,191 @@
 """메모리 관리 유틸리티
 
-메모리 관리 도구.
+메모리 관리 도구 및 성능 모드 설정.
 
 사용법:
     from modules.utils.memory_utils import memory_cleanup, chunked_process
-
+    
     # 대량 작업 후 메모리 정리
     memory_cleanup()
     
     # 청크 단위 처리
     for chunk in chunked_process(large_list, chunk_size=10):
         process(chunk)
+    
+    # 성능 모드 확인
+    from modules.utils.memory_utils import is_low_memory_mode, get_performance_config
+    if is_low_memory_mode():
+        print("저사양 모드")
 """
 
 import gc
 import sys
-from typing import TypeVar, Iterator, List, Callable, Any
+import os
+from typing import TypeVar, Iterator, List, Callable, Any, Dict
 from contextlib import contextmanager
 
+# ============================================================================
+# 성능 모드 설정 (개발/테스트용)
+# ============================================================================
+# OPTIMIZE_MODE 값으로 성능 최적화 모드 제어:
+#   0 = 기본 모드 (최적화 없음, 고사양)
+#   1 = 최적화 모드 (저사양 최적화 적용)
+#   None = 자동 감지 (시스템 메모리 기반, 4GB 미만이면 최적화)
+# ============================================================================
+OPTIMIZE_MODE = None  # 개발시 0 또는 1로 변경하여 테스트
+
+# 전역 변수
+_memory_mode = None
+_memory_info = None
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
 T = TypeVar('T')
+
+
+def get_system_memory_info() -> Dict[str, Any]:
+    """시스템 메모리 정보를 반환합니다."""
+    global _memory_info
+    
+    if _memory_info is not None:
+        return _memory_info
+    
+    if HAS_PSUTIL:
+        vm = psutil.virtual_memory()
+        _memory_info = {
+            "total_gb": vm.total / (1024**3),
+            "available_gb": vm.available / (1024**3),
+            "percent_used": vm.percent,
+            "has_psutil": True
+        }
+    else:
+        # psutil이 없는 경우 환경변수나 기본값 사용
+        total_gb = float(os.environ.get("SYSTEM_MEMORY_GB", "4.0"))
+        _memory_info = {
+            "total_gb": total_gb,
+            "available_gb": total_gb * 0.3,
+            "percent_used": 70.0,
+            "has_psutil": False
+        }
+    
+    return _memory_info
+
+
+def is_low_memory_mode() -> bool:
+    """저사양 모드인지 확인합니다.
+    
+    우선순위:
+    1. OPTIMIZE_MODE 변수 (0=고사양, 1=저사양, None=자동)
+    2. 환경변수 LOW_MEMORY_MODE (true/false)
+    3. 시스템 메모리 자동 감지 (4GB 미만)
+    """
+    global _memory_mode
+    
+    # 이미 결정된 모드가 있으면 반환
+    if _memory_mode is not None:
+        return _memory_mode == "low"
+    
+    # 1. 코드 변수 확인 (개발/테스트용)
+    if OPTIMIZE_MODE is not None:
+        _memory_mode = "low" if OPTIMIZE_MODE == 1 else "high"
+        return _memory_mode == "low"
+    
+    # 2. 환경변수 확인
+    env_mode = os.environ.get("LOW_MEMORY_MODE", "").lower()
+    if env_mode in ("true", "1", "yes"):
+        _memory_mode = "low"
+        return True
+    elif env_mode in ("false", "0", "no"):
+        _memory_mode = "high"
+        return False
+    
+    # 3. 시스템 메모리 자동 감지
+    memory_info = get_system_memory_info()
+    if memory_info["total_gb"] < 4.0:
+        _memory_mode = "low"
+        return True
+    else:
+        _memory_mode = "high"
+        return False
+
+
+def get_performance_config() -> Dict[str, Any]:
+    """현재 메모리 모드에 맞는 성능 설정을 반환합니다."""
+    if is_low_memory_mode():
+        return {
+            # 저사양 모드 (4GB 미만 또는 OPTIMIZE_MODE=1)
+            "mode": "low_memory",
+            "db_pool_size": 3,
+            "thread_max_workers": 2,
+            "cache_max_entries": 5,
+            "cache_ttl": 300,  # 5분
+            "batch_size_small": 3,
+            "batch_size_medium": 5,
+            "batch_size_large": 10,
+            "gc_threshold": (200, 5, 5),
+            "enable_aggressive_gc": True,
+        }
+    else:
+        return {
+            # 고사양 모드 (4GB 이상 또는 OPTIMIZE_MODE=0)
+            "mode": "high_performance",
+            "db_pool_size": 5,
+            "thread_max_workers": 4,
+            "cache_max_entries": 20,
+            "cache_ttl": 600,  # 10분
+            "batch_size_small": 10,
+            "batch_size_medium": 20,
+            "batch_size_large": 50,
+            "gc_threshold": (700, 10, 10),
+            "enable_aggressive_gc": False,
+        }
+
+
+def configure_gc_for_mode():
+    """현재 모드에 맞게 GC를 설정합니다."""
+    config = get_performance_config()
+    gc.set_threshold(*config["gc_threshold"])
+    if config["enable_aggressive_gc"]:
+        gc.collect()
+
+
+def get_cache_params() -> Dict[str, Any]:
+    """캐시 파라미터를 반환합니다."""
+    config = get_performance_config()
+    return {
+        "max_entries": config["cache_max_entries"],
+        "ttl": config["cache_ttl"]
+    }
+
+
+def get_batch_size(record_count: int) -> int:
+    """레코드 수에 따른 동적 배치 크기를 반환합니다."""
+    config = get_performance_config()
+    
+    if record_count < 50:
+        return config["batch_size_small"]
+    elif record_count < 200:
+        return config["batch_size_medium"]
+    else:
+        return config["batch_size_large"]
+
+
+def get_thread_max_workers() -> int:
+    """ThreadPoolExecutor 최대 워커 수를 반환합니다."""
+    return get_performance_config()["thread_max_workers"]
+
+
+def get_db_pool_size() -> int:
+    """DB 커넥션 풀 크기를 반환합니다."""
+    return get_performance_config()["db_pool_size"]
+
+
+# 앱 시작 시 GC 설정
+configure_gc_for_mode()
 
 
 def memory_cleanup(full: bool = False) -> None:
