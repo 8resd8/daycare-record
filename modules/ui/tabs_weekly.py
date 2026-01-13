@@ -290,11 +290,23 @@ def _render_person_date_filter(customer_name: str, active_doc):
     start_key = f"main_p_start_{safe_name}"
     end_key = f"main_p_end_{safe_name}"
 
-    # 초기값 설정
+    # PDF 업로드 데이터에서 날짜 범위 추출
+    pdf_start, pdf_end = _get_date_range_from_doc(active_doc, customer_name)
+    
+    # 초기값 설정 (PDF 날짜가 있으면 우선 사용)
     if start_key not in st.session_state:
-        st.session_state[start_key] = default_start
+        st.session_state[start_key] = pdf_start if pdf_start else default_start
     if end_key not in st.session_state:
-        st.session_state[end_key] = default_end
+        st.session_state[end_key] = pdf_end if pdf_end else default_end
+    
+    # PDF 문서가 변경되었을 때 필터 업데이트
+    doc_id_key = f"_last_doc_id_{safe_name}"
+    current_doc_id = active_doc.get('id') if active_doc else None
+    if current_doc_id and st.session_state.get(doc_id_key) != current_doc_id:
+        if pdf_start and pdf_end:
+            st.session_state[start_key] = pdf_start
+            st.session_state[end_key] = pdf_end
+        st.session_state[doc_id_key] = current_doc_id
 
     # 버튼 클릭 플래그 확인 및 값 변경 (위젯 생성 전)
     last_week_flag = f"_set_last_week_{safe_name}"
@@ -425,3 +437,28 @@ def _convert_db_records(records):
             'writer_func': r.get('writer_func'),
         })
     return parsed_records
+
+
+def _get_date_range_from_doc(active_doc, customer_name):
+    """PDF 문서에서 특정 대상자의 날짜 범위 추출"""
+    if not active_doc or not active_doc.get('parsed_data'):
+        return None, None
+    
+    dates = []
+    for record in active_doc['parsed_data']:
+        # 해당 대상자의 레코드만 필터링
+        if record.get('customer_name') == customer_name:
+            record_date = record.get('date')
+            if record_date:
+                # 문자열이면 date로 변환
+                if isinstance(record_date, str):
+                    try:
+                        from datetime import datetime as dt
+                        record_date = dt.strptime(record_date, '%Y-%m-%d').date()
+                    except:
+                        continue
+                dates.append(record_date)
+    
+    if dates:
+        return min(dates), max(dates)
+    return None, None

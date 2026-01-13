@@ -235,8 +235,7 @@ def render_sidebar():
         
         # 📅 기간별 데이터 조회 - 항상 표시
         _render_date_filter_section()
-        
-        st.divider()
+
 
         if st.session_state.docs:
             if not st.session_state.active_doc_id:
@@ -829,7 +828,7 @@ def _render_date_filter_section():
         active_doc = get_active_doc()
         if active_doc and active_doc.get('is_db_source'):
             record_count = len(active_doc.get('parsed_data', []))
-            st.caption(f"📊 조회됨: {record_count}건")
+            st.caption(f"전체 데이터 개수: {record_count}건")
 
 
 def _execute_db_search(start_date, end_date):
