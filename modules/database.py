@@ -27,6 +27,16 @@ def save_parsed_data(records):
     return daily_info_repo.save_parsed_data(records)
 
 
+def get_customers_with_records(start_date=None, end_date=None):
+    """날짜 범위 내에 기록이 있는 대상자 목록 조회"""
+    return daily_info_repo.get_customers_with_records(start_date, end_date)
+
+
+def get_all_records_by_date_range(start_date, end_date):
+    """날짜 범위 내 모든 레코드 조회"""
+    return daily_info_repo.get_all_records_by_date_range(start_date, end_date)
+
+
 def get_db_connection():
     """Get a database connection using Streamlit secrets."""
     import streamlit as st

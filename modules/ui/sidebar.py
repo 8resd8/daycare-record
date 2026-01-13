@@ -3,24 +3,96 @@
 성능 최적화:
 - 파일 처리 후 즉시 메모리 해제
 - 캐시 무효화로 메모리 관리
+- 세션 지속성을 위한 로컬스토리지 연동
 """
 
 import gc
 import time
+import json
+from datetime import date, datetime, timedelta
 import streamlit as st
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from modules.pdf_parser import CareRecordParser
-from modules.database import save_parsed_data
+from modules.database import save_parsed_data, get_customers_with_records, get_all_records_by_date_range
 from modules.ui.ui_helpers import (
     get_active_doc, get_person_keys_for_doc, iter_person_entries, 
     ensure_active_person, person_checkbox_key, select_person,
-    get_person_done, set_person_done, invalidate_person_cache
+    get_person_done, set_person_done, invalidate_person_cache,
+    iter_db_person_entries
 )
+
+
+def _get_current_month_range():
+    """현재 달의 시작일과 종료일 반환"""
+    today = date.today()
+    first_day = today.replace(day=1)
+    if today.month == 12:
+        last_day = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
+    else:
+        last_day = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
+    return first_day, last_day
+
+
+def _get_last_week_range():
+    """저번주 월요일 ~ 일요일 반환"""
+    today = date.today()
+    # 오늘의 요일 (0=월, 6=일)
+    current_weekday = today.weekday()
+    # 이번주 월요일
+    this_monday = today - timedelta(days=current_weekday)
+    # 저번주 월요일
+    last_monday = this_monday - timedelta(days=7)
+    # 저번주 일요일
+    last_sunday = last_monday + timedelta(days=6)
+    return last_monday, last_sunday
+
+
+def _restore_session_from_storage():
+    """로컬스토리지에서 날짜 필터 복원 및 자동 조회"""
+    if 'session_restored' not in st.session_state:
+        st.session_state.session_restored = True
+        st.session_state.auto_search_pending = True
+
+
+def _check_auto_search():
+    """새로고침 시 저장된 날짜로 자동 조회 실행"""
+    if st.session_state.get('auto_search_pending') and not st.session_state.docs:
+        st.session_state.auto_search_pending = False
+        # 세션에 날짜가 있으면 자동 조회
+        if st.session_state.get('db_filter_start') and st.session_state.get('db_filter_end'):
+            start_date = st.session_state.db_filter_start
+            end_date = st.session_state.db_filter_end
+            _execute_db_search(start_date, end_date)
+
+
+def _save_session_to_storage():
+    """세션 데이터를 로컬스토리지에 저장 (JavaScript 연동)"""
+    # 날짜 필터 값 저장
+    start_date = st.session_state.get('db_filter_start', '')
+    end_date = st.session_state.get('db_filter_end', '')
+    start_str = str(start_date) if start_date else ''
+    end_str = str(end_date) if end_date else ''
+    
+    # 로컬스토리지에 날짜 필터 저장
+    st.markdown(f"""
+    <script>
+    (function() {{
+        localStorage.setItem('arisa_filter_start', '{start_str}');
+        localStorage.setItem('arisa_filter_end', '{end_str}');
+    }})();
+    </script>
+    """, unsafe_allow_html=True)
 
 
 def render_sidebar():
     """사이드바 렌더링"""
+    # 세션 복원 시도
+    _restore_session_from_storage()
+    
+    # 자동 조회 체크 (새로고침 시)
+    _check_auto_search()
+    
     with st.sidebar:
         nav = st.radio(
             "메뉴",
@@ -132,17 +204,22 @@ def render_sidebar():
             del st.session_state.parsing_success
 
         st.divider()
+        
+        # 📅 기간별 데이터 조회 - 항상 표시
+        _render_date_filter_section()
+        
+        st.divider()
 
         if st.session_state.docs:
             if not st.session_state.active_doc_id:
                 st.session_state.active_doc_id = st.session_state.docs[0]["id"]
 
             active_doc = get_active_doc()
-            st.subheader("📄 현재 파일")
-            if active_doc:
+            
+            # PDF 업로드된 경우에만 파일명 표시
+            if active_doc and not active_doc.get('is_db_source'):
+                st.subheader("📄 현재 파일")
                 st.write(f"**{active_doc['name']}**")
-            else:
-                st.write("-")
 
             if active_doc and active_doc.get("parsed_data"):
                 # Auto-save all parsed data to DB (only once)
@@ -151,7 +228,6 @@ def render_sidebar():
                         count = save_parsed_data(active_doc["parsed_data"])
                         if count > 0:
                             st.toast(f"{count}건의 기록이 자동 저장되었습니다.", icon="✅")
-                            # Mark as saved
                             for doc in st.session_state.docs:
                                 if doc["id"] == active_doc["id"]:
                                     doc["db_saved"] = True
@@ -163,7 +239,6 @@ def render_sidebar():
                 st.divider()
                 st.markdown("#### 전체인원 AI 처리")
                 
-                # Custom CSS for green text color
                 st.markdown("""
                 <style>
                 .green-text {
@@ -186,8 +261,9 @@ def render_sidebar():
 
             # 프래그먼트로 사람 목록 렌더링 (부분 리렌더링 최적화)
             _render_person_list_fragment()
-        else:
-            st.info("좌측 상단에서 PDF 파일을 업로드해주세요.")
+            
+            # 세션 데이터 저장
+            _save_session_to_storage()
 
 
 @st.fragment
@@ -230,6 +306,89 @@ def _render_person_list_fragment():
                 key=f"done_{entry['key']}"
             )
             set_person_done(entry["key"], done_value)
+
+
+def _render_person_date_filter(entry):
+    """선택된 대상자의 날짜 필터 렌더링"""
+    person_name = entry.get('person_name', '대상자')
+    
+    with st.expander(f"📅 {person_name} 어르신 기간 필터", expanded=False):
+        default_start, default_end = _get_current_month_range()
+        
+        # 대상자별 날짜 필터 세션 키
+        person_start_key = f"person_filter_start_{entry['key']}"
+        person_end_key = f"person_filter_end_{entry['key']}"
+        
+        if person_start_key not in st.session_state:
+            st.session_state[person_start_key] = default_start
+        if person_end_key not in st.session_state:
+            st.session_state[person_end_key] = default_end
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            p_start = st.date_input(
+                "시작",
+                value=st.session_state[person_start_key],
+                key=f"p_start_{entry['key']}"
+            )
+        with col2:
+            p_end = st.date_input(
+                "종료",
+                value=st.session_state[person_end_key],
+                key=f"p_end_{entry['key']}"
+            )
+        
+        st.session_state[person_start_key] = p_start
+        st.session_state[person_end_key] = p_end
+        
+        if st.button(f"🔍 {person_name} 조회", use_container_width=True, key=f"p_search_{entry['key']}"):
+            _execute_person_db_search(entry, p_start, p_end)
+
+
+def _execute_person_db_search(entry, start_date, end_date):
+    """특정 대상자의 DB 데이터 조회"""
+    from modules.database import get_all_records_by_date_range
+    
+    person_name = entry.get('person_name')
+    
+    try:
+        records = get_all_records_by_date_range(start_date, end_date)
+        
+        # 해당 대상자의 레코드만 필터링
+        person_records = [r for r in records if r.get('customer_name') == person_name]
+        
+        if person_records:
+            db_doc_id = f"db_person_{person_name}_{start_date}_{end_date}"
+            
+            # 기존 개인 조회 문서 제거
+            st.session_state.docs = [d for d in st.session_state.docs 
+                                      if not d.get('id', '').startswith(f'db_person_{person_name}_')]
+            
+            parsed_records = _convert_db_records(person_records)
+            
+            new_doc = {
+                "id": db_doc_id,
+                "name": f"{person_name} ({start_date} ~ {end_date})",
+                "completed": False,
+                "parsed_data": parsed_records,
+                "eval_results": {},
+                "error": None,
+                "db_saved": True,
+                "is_db_source": True,
+            }
+            st.session_state.docs.append(new_doc)
+            st.session_state.active_doc_id = db_doc_id
+            st.session_state.active_person_key = f"{db_doc_id}::{person_name}"
+            
+            invalidate_person_cache()
+            
+            st.toast(f"✅ {person_name} 어르신 {len(parsed_records)}건 조회", icon="✅")
+            st.rerun()
+        else:
+            st.warning(f"해당 기간에 {person_name} 어르신의 기록이 없습니다.")
+            
+    except Exception as e:
+        st.error(f"조회 오류: {e}")
 
 
 def _batch_generate_weekly_reports(person_entries):
@@ -583,3 +742,153 @@ def _batch_evaluate_all_optimized(person_entries):
     status_text.text("✅ 모든 인원의 특이사항 평가가 완료되었습니다.")
     st.toast("✅ 일괄 평가 완료!", icon="✅")
     st.rerun()
+
+
+def _render_date_filter_section():
+    """📅 기간별 데이터 조회 섹션 - 항상 표시"""
+    st.subheader("📅 기간별 데이터 조회")
+    
+    # 날짜 필터링 (디폴트: 현재 달)
+    default_start, default_end = _get_current_month_range()
+    
+    # 세션에서 날짜 범위 복원
+    if 'db_filter_start' not in st.session_state:
+        st.session_state.db_filter_start = default_start
+    if 'db_filter_end' not in st.session_state:
+        st.session_state.db_filter_end = default_end
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input(
+            "시작일",
+            value=st.session_state.db_filter_start,
+            key="db_start_date"
+        )
+    with col2:
+        end_date = st.date_input(
+            "종료일",
+            value=st.session_state.db_filter_end,
+            key="db_end_date"
+        )
+    
+    # 날짜 범위 저장
+    st.session_state.db_filter_start = start_date
+    st.session_state.db_filter_end = end_date
+    
+    col_btn1, col_btn2, col_btn3 = st.columns(3)
+    with col_btn1:
+        if st.button("🔍 조회", use_container_width=True, key="db_search_btn"):
+            _execute_db_search(start_date, end_date)
+    with col_btn2:
+        if st.button("📅 지난주", use_container_width=True, key="db_last_week_btn"):
+            # 오늘 기준 지난주 월~일
+            last_mon, last_sun = _get_last_week_range()
+            st.session_state.db_filter_start = last_mon
+            st.session_state.db_filter_end = last_sun
+            st.rerun()
+    with col_btn3:
+        if st.button("⏪ 1주전", use_container_width=True, key="db_prev_week_btn"):
+            # 필터 시작일 기준 1주일 전 월~일
+            current_start = st.session_state.db_filter_start
+            current_monday = current_start - timedelta(days=current_start.weekday())
+            prev_monday = current_monday - timedelta(days=7)
+            prev_sunday = prev_monday + timedelta(days=6)
+            st.session_state.db_filter_start = prev_monday
+            st.session_state.db_filter_end = prev_sunday
+            st.rerun()
+    
+    # 현재 조회된 기간 표시
+    if st.session_state.get('db_records_loaded'):
+        active_doc = get_active_doc()
+        if active_doc and active_doc.get('is_db_source'):
+            record_count = len(active_doc.get('parsed_data', []))
+            st.caption(f"📊 조회됨: {record_count}건")
+
+
+def _execute_db_search(start_date, end_date):
+    """DB에서 전체 데이터 조회 실행"""
+    try:
+        records = get_all_records_by_date_range(start_date, end_date)
+        
+        if records:
+            db_doc_id = f"db_{start_date}_{end_date}"
+            
+            # 기존 DB 문서가 있으면 제거
+            st.session_state.docs = [d for d in st.session_state.docs if not d.get('id', '').startswith('db_')]
+            
+            # DB 레코드를 parsed_data 형식으로 변환
+            parsed_records = _convert_db_records(records)
+            
+            new_doc = {
+                "id": db_doc_id,
+                "name": f"DB 조회 ({start_date} ~ {end_date})",
+                "completed": False,
+                "parsed_data": parsed_records,
+                "eval_results": {},
+                "error": None,
+                "db_saved": True,
+                "is_db_source": True,
+            }
+            st.session_state.docs.append(new_doc)
+            st.session_state.active_doc_id = db_doc_id
+            st.session_state.active_person_key = None
+            st.session_state.db_records_loaded = True
+            
+            # 캐시 무효화
+            invalidate_person_cache()
+            
+            st.toast(f"✅ {len(parsed_records)}건의 기록을 조회했습니다.", icon="✅")
+            st.rerun()
+        else:
+            st.toast(f"{start_date} ~ {end_date} 기록이 없습니다.", icon="ℹ️")
+            
+    except Exception as e:
+        st.error(f"데이터 조회 중 오류: {e}")
+
+
+def _convert_db_records(records):
+    """DB 레코드를 parsed_data 형식으로 변환"""
+    parsed_records = []
+    for r in records:
+        parsed_records.append({
+            'customer_id': r.get('customer_id'),
+            'customer_name': r.get('customer_name'),
+            'customer_birth_date': r.get('customer_birth_date'),
+            'customer_grade': r.get('customer_grade'),
+            'customer_recognition_no': r.get('customer_recognition_no'),
+            'record_id': r.get('record_id'),
+            'date': r.get('date'),
+            'start_time': r.get('start_time'),
+            'end_time': r.get('end_time'),
+            'total_service_time': r.get('total_service_time'),
+            'transport_service': r.get('transport_service'),
+            'transport_vehicles': r.get('transport_vehicles'),
+            'hygiene_care': r.get('hygiene_care'),
+            'bath_time': r.get('bath_time'),
+            'bath_method': r.get('bath_method'),
+            'meal_breakfast': r.get('meal_breakfast'),
+            'meal_lunch': r.get('meal_lunch'),
+            'meal_dinner': r.get('meal_dinner'),
+            'toilet_care': r.get('toilet_care'),
+            'mobility_care': r.get('mobility_care'),
+            'physical_note': r.get('physical_note'),
+            'writer_phy': r.get('writer_phy'),
+            'cog_support': r.get('cog_support'),
+            'comm_support': r.get('comm_support'),
+            'cognitive_note': r.get('cognitive_note'),
+            'writer_cog': r.get('writer_cog'),
+            'bp_temp': r.get('bp_temp'),
+            'health_manage': r.get('health_manage'),
+            'nursing_manage': r.get('nursing_manage'),
+            'emergency': r.get('emergency'),
+            'nursing_note': r.get('nursing_note'),
+            'writer_nur': r.get('writer_nur'),
+            'prog_basic': r.get('prog_basic'),
+            'prog_activity': r.get('prog_activity'),
+            'prog_cognitive': r.get('prog_cognitive'),
+            'prog_therapy': r.get('prog_therapy'),
+            'prog_enhance_detail': r.get('prog_enhance_detail'),
+            'functional_note': r.get('functional_note'),
+            'writer_func': r.get('writer_func'),
+        })
+    return parsed_records

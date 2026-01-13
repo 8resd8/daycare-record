@@ -5,13 +5,35 @@ import pandas as pd
 import hashlib
 import json
 import time
+from datetime import date, timedelta
 import streamlit.components.v1 as components
-from modules.database import save_weekly_status, load_weekly_status
+from modules.database import save_weekly_status, load_weekly_status, get_all_records_by_date_range
 from modules.customers import resolve_customer_id
 from modules.weekly_data_analyzer import compute_weekly_status
 from modules.services.weekly_report_service import report_service
-from modules.ui.ui_helpers import get_active_doc, get_active_person_records
+from modules.ui.ui_helpers import get_active_doc, get_active_person_records, invalidate_person_cache
 from modules.utils.enums import CategoryDisplay, RequiredFields, WriterFields, WeeklyDisplayFields
+
+
+def _get_current_month_range():
+    """현재 달의 시작일과 종료일 반환"""
+    today = date.today()
+    first_day = today.replace(day=1)
+    if today.month == 12:
+        last_day = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
+    else:
+        last_day = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
+    return first_day, last_day
+
+
+def _get_last_week_range():
+    """저번주 월요일 ~ 일요일 반환"""
+    today = date.today()
+    current_weekday = today.weekday()
+    this_monday = today - timedelta(days=current_weekday)
+    last_monday = this_monday - timedelta(days=7)
+    last_sunday = last_monday + timedelta(days=6)
+    return last_monday, last_sunday
 
 
 def render_records_tab():
@@ -30,6 +52,9 @@ def render_records_tab():
         customer_name = person_name or (data[0].get('customer_name', '알 수 없음') if data else '알 수 없음')
 
         st.markdown(f"### 👤 대상자: **{customer_name}** 어르신")
+        
+        # 대상자별 날짜 필터
+        _render_person_date_filter(customer_name, active_doc)
 
         sub_tab_basic, sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs(CategoryDisplay.WEEKLY_DISPLAY_NAMES)
 
@@ -254,3 +279,150 @@ def _render_copyable_report(container, text: str, state_key: str, widget_key: st
         """,
         height=40,
     )
+
+
+def _render_person_date_filter(customer_name: str, active_doc):
+    """대상자별 날짜 필터 렌더링 (메인화면)"""
+    default_start, default_end = _get_current_month_range()
+
+    # 대상자별 날짜 필터 세션 키
+    safe_name = customer_name.replace(" ", "_")
+    person_start_key = f"main_filter_start_{safe_name}"
+    person_end_key = f"main_filter_end_{safe_name}"
+
+    if person_start_key not in st.session_state:
+        st.session_state[person_start_key] = default_start
+    if person_end_key not in st.session_state:
+        st.session_state[person_end_key] = default_end
+
+    # 해당 인원 필터 조회
+    col1, col2 = st.columns(2)
+    with col1:
+        p_start = st.date_input(
+            "시작",
+            value=st.session_state[person_start_key],
+            key=f"main_p_start_{safe_name}"
+        )
+    with col2:
+        p_end = st.date_input(
+            "종료",
+            value=st.session_state[person_end_key],
+            key=f"main_p_end_{safe_name}"
+        )
+
+    # 날짜 값 세션에 저장
+    st.session_state[person_start_key] = p_start
+    st.session_state[person_end_key] = p_end
+
+    # 버튼: 조회 | 지난주 | 1주전
+    col_btn1, col_btn2, col_btn3 = st.columns(3)
+    with col_btn1:
+        if st.button(f"🔍 조회", use_container_width=True, key=f"main_p_search_{safe_name}"):
+            _execute_person_search(customer_name, st.session_state[person_start_key], st.session_state[person_end_key])
+    with col_btn2:
+        if st.button(f"📅 지난주", use_container_width=True, key=f"main_p_lastweek_{safe_name}"):
+            # 오늘 기준 지난주 월~일
+            last_mon, last_sun = _get_last_week_range()
+            st.session_state[person_start_key] = last_mon
+            st.session_state[person_end_key] = last_sun
+            st.rerun()
+    with col_btn3:
+        if st.button(f"⏪ 1주전", use_container_width=True, key=f"main_p_prevweek_{safe_name}"):
+            # 필터 시작일 기준 1주일 전 월~일
+            current_start = st.session_state[person_start_key]
+            current_monday = current_start - timedelta(days=current_start.weekday())
+            prev_monday = current_monday - timedelta(days=7)
+            prev_sunday = prev_monday + timedelta(days=6)
+            st.session_state[person_start_key] = prev_monday
+            st.session_state[person_end_key] = prev_sunday
+            st.rerun()
+
+def _execute_person_search(customer_name: str, start_date, end_date):
+    """특정 대상자의 DB 데이터 조회"""
+    try:
+        records = get_all_records_by_date_range(start_date, end_date)
+        
+        # 해당 대상자의 레코드만 필터링
+        person_records = [r for r in records if r.get('customer_name') == customer_name]
+        
+        if person_records:
+            db_doc_id = f"db_person_{customer_name}_{start_date}_{end_date}"
+            
+            # 기존 개인 조회 문서 제거
+            st.session_state.docs = [d for d in st.session_state.docs 
+                                      if not d.get('id', '').startswith(f'db_person_{customer_name}_')]
+            
+            # DB 레코드를 parsed_data 형식으로 변환
+            parsed_records = _convert_db_records(person_records)
+            
+            new_doc = {
+                "id": db_doc_id,
+                "name": f"{customer_name} ({start_date} ~ {end_date})",
+                "completed": False,
+                "parsed_data": parsed_records,
+                "eval_results": {},
+                "error": None,
+                "db_saved": True,
+                "is_db_source": True,
+            }
+            st.session_state.docs.append(new_doc)
+            st.session_state.active_doc_id = db_doc_id
+            st.session_state.active_person_key = f"{db_doc_id}::{customer_name}"
+            
+            invalidate_person_cache()
+            
+            st.toast(f"✅ {customer_name} 어르신 {len(parsed_records)}건 조회", icon="✅")
+            st.rerun()
+        else:
+            st.toast(f"{start_date} ~ {end_date} 기록이 없습니다.", icon="ℹ️")
+            
+    except Exception as e:
+        st.error(f"조회 오류: {e}")
+
+
+def _convert_db_records(records):
+    """DB 레코드를 parsed_data 형식으로 변환"""
+    parsed_records = []
+    for r in records:
+        parsed_records.append({
+            'customer_id': r.get('customer_id'),
+            'customer_name': r.get('customer_name'),
+            'customer_birth_date': r.get('customer_birth_date'),
+            'customer_grade': r.get('customer_grade'),
+            'customer_recognition_no': r.get('customer_recognition_no'),
+            'record_id': r.get('record_id'),
+            'date': r.get('date'),
+            'start_time': r.get('start_time'),
+            'end_time': r.get('end_time'),
+            'total_service_time': r.get('total_service_time'),
+            'transport_service': r.get('transport_service'),
+            'transport_vehicles': r.get('transport_vehicles'),
+            'hygiene_care': r.get('hygiene_care'),
+            'bath_time': r.get('bath_time'),
+            'bath_method': r.get('bath_method'),
+            'meal_breakfast': r.get('meal_breakfast'),
+            'meal_lunch': r.get('meal_lunch'),
+            'meal_dinner': r.get('meal_dinner'),
+            'toilet_care': r.get('toilet_care'),
+            'mobility_care': r.get('mobility_care'),
+            'physical_note': r.get('physical_note'),
+            'writer_phy': r.get('writer_phy'),
+            'cog_support': r.get('cog_support'),
+            'comm_support': r.get('comm_support'),
+            'cognitive_note': r.get('cognitive_note'),
+            'writer_cog': r.get('writer_cog'),
+            'bp_temp': r.get('bp_temp'),
+            'health_manage': r.get('health_manage'),
+            'nursing_manage': r.get('nursing_manage'),
+            'emergency': r.get('emergency'),
+            'nursing_note': r.get('nursing_note'),
+            'writer_nur': r.get('writer_nur'),
+            'prog_basic': r.get('prog_basic'),
+            'prog_activity': r.get('prog_activity'),
+            'prog_cognitive': r.get('prog_cognitive'),
+            'prog_therapy': r.get('prog_therapy'),
+            'prog_enhance_detail': r.get('prog_enhance_detail'),
+            'functional_note': r.get('functional_note'),
+            'writer_func': r.get('writer_func'),
+        })
+    return parsed_records

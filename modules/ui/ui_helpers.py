@@ -164,3 +164,26 @@ def invalidate_person_cache():
     """사람 목록 캐시 무효화"""
     if 'person_entries_cache' in st.session_state:
         st.session_state.person_entries_cache.clear()
+
+
+def iter_db_person_entries(customers_with_records: list) -> list:
+    """DB에서 조회한 대상자 목록을 person_entries 형식으로 변환합니다.
+    
+    Args:
+        customers_with_records: get_customers_with_records() 결과
+        
+    Returns:
+        iter_person_entries()와 동일한 형식의 리스트
+    """
+    entries = []
+    for customer in customers_with_records:
+        key = f"db::{customer.get('name', '미상')}"
+        entries.append({
+            "key": key,
+            "doc_id": "db",
+            "doc_name": "DB 조회",
+            "person_name": customer.get("name", "미상"),
+            "record_count": customer.get("record_count", 0),
+            "customer_id": customer.get("customer_id"),
+        })
+    return entries

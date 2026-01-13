@@ -4,9 +4,8 @@
 import gc
 import streamlit as st
 
-# 저메모리 환경 최적화: GC 임계값 조정 (앱 시작 시 1회)
 if 'gc_optimized' not in st.session_state:
-    gc.set_threshold(400, 5, 5)  # 더 자주 GC 수행
+    gc.set_threshold(700, 10, 10)
     st.session_state.gc_optimized = True
 
 # --- 페이지 설정 ---

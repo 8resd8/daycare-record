@@ -354,6 +354,54 @@ class DailyInfoRepository(BaseRepository):
         result = self._execute_query_one(query, (customer_id, date))
         return result['record_id'] if result else None
     
+    def get_customers_with_records(self, start_date=None, end_date=None) -> List[Dict]:
+        """날짜 범위 내에 기록이 있는 모든 대상자 목록 조회"""
+        query = """
+            SELECT DISTINCT c.customer_id, c.name, c.birth_date, c.grade, c.recognition_no,
+                   COUNT(di.record_id) as record_count,
+                   MIN(di.date) as first_date,
+                   MAX(di.date) as last_date
+            FROM customers c
+            INNER JOIN daily_infos di ON c.customer_id = di.customer_id
+        """
+        params = []
+        
+        if start_date and end_date:
+            query += " WHERE di.date BETWEEN %s AND %s"
+            params.extend([start_date, end_date])
+        
+        query += " GROUP BY c.customer_id, c.name, c.birth_date, c.grade, c.recognition_no"
+        query += " ORDER BY c.name"
+        
+        return self._execute_query(query, tuple(params) if params else None)
+    
+    def get_all_records_by_date_range(self, start_date, end_date) -> List[Dict]:
+        """날짜 범위 내 모든 레코드 조회 (대상자 정보 포함)"""
+        query = """
+            SELECT 
+                c.customer_id, c.name as customer_name, c.birth_date as customer_birth_date,
+                c.grade as customer_grade, c.recognition_no as customer_recognition_no,
+                di.record_id, di.date, di.start_time, di.end_time,
+                di.total_service_time, di.transport_service, di.transport_vehicles,
+                dp.hygiene_care, dp.bath_time, dp.bath_method,
+                dp.meal_breakfast, dp.meal_lunch, dp.meal_dinner,
+                dp.toilet_care, dp.mobility_care, dp.note as physical_note, dp.writer_name as writer_phy,
+                dc.cog_support, dc.comm_support, dc.note as cognitive_note, dc.writer_name as writer_cog,
+                dn.bp_temp, dn.health_manage, dn.nursing_manage, dn.emergency,
+                dn.note as nursing_note, dn.writer_name as writer_nur,
+                dr.prog_basic, dr.prog_activity, dr.prog_cognitive, dr.prog_therapy,
+                dr.prog_enhance_detail, dr.note as functional_note, dr.writer_name as writer_func
+            FROM daily_infos di
+            INNER JOIN customers c ON di.customer_id = c.customer_id
+            LEFT JOIN daily_physicals dp ON dp.record_id = di.record_id
+            LEFT JOIN daily_cognitives dc ON dc.record_id = di.record_id
+            LEFT JOIN daily_nursings dn ON dn.record_id = di.record_id
+            LEFT JOIN daily_recoveries dr ON dr.record_id = di.record_id
+            WHERE di.date BETWEEN %s AND %s
+            ORDER BY c.name, di.date DESC
+        """
+        return self._execute_query(query, (start_date, end_date))
+    
     # 트랜잭션 처리를 위한 비공개 헬퍼 메서드들
     def _get_or_create_customer_in_transaction(self, cursor, record: Dict) -> int:
         """Get or create customer within an existing transaction."""
