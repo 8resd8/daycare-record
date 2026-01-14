@@ -13,6 +13,7 @@ class EmployeeEvaluationRepository(BaseRepository):
         category: str,
         evaluation_type: str,
         evaluation_date: date,
+        target_date: date = None,
         evaluator_user_id: int = None,
         score: int = 1,
         comment: str = None
@@ -20,13 +21,13 @@ class EmployeeEvaluationRepository(BaseRepository):
         """Save employee evaluation and return the inserted ID."""
         insert_query = '''
             INSERT INTO employee_evaluations (
-                record_id, target_user_id, evaluator_user_id,
+                record_id, target_date, target_user_id, evaluator_user_id,
                 category, evaluation_type, score, comment, evaluation_date
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         '''
         return self._execute_transaction_lastrowid(
             insert_query, (
-                record_id, target_user_id, evaluator_user_id,
+                record_id, target_date, target_user_id, evaluator_user_id,
                 category, evaluation_type, score, comment, evaluation_date
             )
         )
@@ -35,7 +36,7 @@ class EmployeeEvaluationRepository(BaseRepository):
         """Get all employee evaluations for a specific record."""
         query = """
             SELECT 
-                ee.emp_eval_id, ee.record_id, ee.category, ee.evaluation_type,
+                ee.emp_eval_id, ee.record_id, ee.target_date, ee.category, ee.evaluation_type,
                 ee.score, ee.comment, ee.evaluation_date,
                 tu.name AS target_user_name,
                 eu.name AS evaluator_user_name
@@ -84,6 +85,7 @@ class EmployeeEvaluationRepository(BaseRepository):
         self,
         emp_eval_id: int,
         evaluation_date: date,
+        target_date: date = None,
         evaluator_user_id: int = None,
         score: int = 1,
         comment: str = None
@@ -91,6 +93,7 @@ class EmployeeEvaluationRepository(BaseRepository):
         """Update an existing employee evaluation."""
         update_query = '''
             UPDATE employee_evaluations SET
+                target_date = %s,
                 evaluator_user_id = %s,
                 score = %s,
                 comment = %s,
@@ -98,5 +101,5 @@ class EmployeeEvaluationRepository(BaseRepository):
             WHERE emp_eval_id = %s
         '''
         return self._execute_transaction(
-            update_query, (evaluator_user_id, score, comment, evaluation_date, emp_eval_id)
+            update_query, (target_date, evaluator_user_id, score, comment, evaluation_date, emp_eval_id)
         )

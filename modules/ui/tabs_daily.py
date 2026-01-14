@@ -535,6 +535,8 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
         st.session_state.emp_eval_save_time = None
     if 'emp_eval_comment_key' not in st.session_state:
         st.session_state.emp_eval_comment_key = 0
+    if 'selected_eval_row' not in st.session_state:
+        st.session_state.selected_eval_row = None
     
     # PDF에서 파싱된 직원 이름 수집 (중복 제거)
     writer_names = set()
@@ -559,6 +561,24 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
     record_date = first_record.get('date')
     record_id = evaluation_service.get_record_id(customer_name, record_date)
     
+    st.subheader("✏️ 평가 입력")
+    
+    # 선택된 행이 있으면 해당 값으로 초기화
+    if st.session_state.selected_eval_row:
+        selected_row = st.session_state.selected_eval_row
+        default_target_idx = writer_list.index(selected_row['target_user_name']) if selected_row['target_user_name'] in writer_list else 0
+        default_category_idx = category_options.index(selected_row['category']) if selected_row['category'] in category_options else 1
+        default_eval_type_idx = evaluation_type_options.index(selected_row['evaluation_type']) if selected_row['evaluation_type'] in evaluation_type_options else 0
+        default_target_date = selected_row['target_date'] if selected_row['target_date'] else record_date
+        default_comment = selected_row['comment']
+
+    else:
+        default_target_idx = 0
+        default_category_idx = 1
+        default_eval_type_idx = 0
+        default_target_date = record_date
+        default_comment = ""
+    
     # 입력 필드 (폼 외부)
     col1, col2 = st.columns(2)
     
@@ -566,13 +586,21 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
         selected_target = st.selectbox(
             "평가 대상",
             options=writer_list,
-            index=0,
+            index=default_target_idx,
             key="emp_eval_target"
         )
+        
+        # 해당 날짜 입력 (평가 대상과 평가 유형 사이)
+        target_date_input = st.date_input(
+            "해당 날짜",
+            value=default_target_date if default_target_date else date.today(),
+            key="emp_eval_target_date"
+        )
+        
         selected_category = st.selectbox(
             "카테고리",
             options=category_options,
-            index=1,  # 기본값 "신체"
+            index=default_category_idx,
             key="emp_eval_category"
         )
     
@@ -580,13 +608,14 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
         selected_eval_type = st.selectbox(
             "평가 유형",
             options=evaluation_type_options,
-            index=0,  # 기본값 "누락"
+            index=default_eval_type_idx,
             key="emp_eval_type"
         )
         comment = st.text_area(
             "코멘트 (선택사항)",
+            value=default_comment,
             placeholder="평가에 대한 추가 코멘트를 입력하세요...",
-            height=68,
+            height=100,
             key=f"emp_eval_comment_{st.session_state.emp_eval_comment_key}"
         )
     
@@ -623,6 +652,7 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
                     category=selected_category,
                     evaluation_type=selected_eval_type,
                     evaluation_date=date.today(),
+                    target_date=target_date_input,
                     evaluator_user_id=1,
                     score=1,
                     comment=comment if comment.strip() else None
@@ -631,6 +661,7 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
                 st.session_state.emp_eval_save_time = time.time()
                 st.session_state.emp_eval_toast_msg = "saved"
                 st.session_state.emp_eval_comment_key += 1
+                st.session_state.selected_eval_row = None
                 st.rerun()
             except Exception as e:
                 st.error(f"평가 저장 중 오류가 발생했습니다: {str(e)}")
@@ -654,11 +685,13 @@ def _render_employee_evaluation_form(person_records: list, person_name: str):
                     emp_eval_repo.update_evaluation(
                         emp_eval_id=existing_id,
                         evaluation_date=date.today(),
+                        target_date=target_date_input,
                         evaluator_user_id=1,
                         score=1,
                         comment=comment if comment.strip() else None
                     )
                     st.session_state.emp_eval_toast_msg = "updated"
+                    st.session_state.selected_eval_row = None
                     st.rerun()
                 except Exception as e:
                     st.error(f"평가 수정 중 오류가 발생했습니다: {str(e)}")
