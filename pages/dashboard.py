@@ -1,8 +1,9 @@
-"""📊 대시보드 - 종합 분석 화면"""
+"""📊 대시보드 - 직원 관리 현황 (개편)"""
 
 import streamlit as st
 import pandas as pd
 import altair as alt
+import numpy as np
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -33,6 +34,24 @@ st.markdown("""
         font-size: 1.8rem !important;
         font-weight: 600;
     }
+    
+    /* 타임라인 스타일 */
+    .timeline-item {
+        border-left: 3px solid #4CAF50;
+        padding-left: 15px;
+        margin-bottom: 15px;
+    }
+    .timeline-date {
+        color: #666;
+        font-size: 0.85rem;
+    }
+    .timeline-type {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.8rem;
+        margin-right: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -48,6 +67,7 @@ def load_dashboard_data(start_date: date, end_date: date) -> dict:
         SELECT 
             ee.emp_eval_id,
             ee.record_id,
+            ee.target_date,
             ee.target_user_id,
             ee.evaluator_user_id,
             ee.category,
@@ -103,13 +123,29 @@ def load_dashboard_data(start_date: date, end_date: date) -> dict:
     """
     df_prev_count = pd.read_sql(prev_emp_eval_query, conn, params=(prev_month_start, prev_month_end))
     
+    # 5. 최근 4주 주별 데이터 (Sparkline용)
+    four_weeks_ago = end_date - timedelta(weeks=4)
+    weekly_query = """
+        SELECT 
+            u.name AS target_user_name,
+            YEARWEEK(ee.evaluation_date, 1) as year_week,
+            COUNT(*) as count
+        FROM employee_evaluations ee
+        LEFT JOIN users u ON ee.target_user_id = u.user_id
+        WHERE ee.evaluation_date BETWEEN %s AND %s
+        GROUP BY u.name, YEARWEEK(ee.evaluation_date, 1)
+        ORDER BY u.name, year_week
+    """
+    df_weekly = pd.read_sql(weekly_query, conn, params=(four_weeks_ago, end_date))
+    
     conn.close()
     
     return {
         "emp_eval": df_emp_eval,
         "ai_eval": df_ai_eval,
         "users": df_users,
-        "prev_month_count": df_prev_count['count'].iloc[0] if not df_prev_count.empty else 0
+        "prev_month_count": df_prev_count['count'].iloc[0] if not df_prev_count.empty else 0,
+        "weekly": df_weekly
     }
 
 
@@ -118,6 +154,39 @@ def get_unique_values(df: pd.DataFrame, column: str) -> list:
     if df.empty or column not in df.columns:
         return []
     return sorted(df[column].dropna().unique().tolist())
+
+
+def create_sparkline(data: list, width: int = 100, height: int = 30) -> str:
+    """Sparkline SVG 생성"""
+    if not data or len(data) < 2:
+        return "—"
+    
+    max_val = max(data) if max(data) > 0 else 1
+    min_val = min(data)
+    range_val = max_val - min_val if max_val != min_val else 1
+    
+    points = []
+    step = width / (len(data) - 1)
+    for i, val in enumerate(data):
+        x = i * step
+        y = height - ((val - min_val) / range_val * (height - 4) + 2)
+        points.append(f"{x},{y}")
+    
+    # 추세 색상 (증가: 빨강, 감소: 초록)
+    color = "#dc3545" if data[-1] > data[0] else "#28a745"
+    
+    svg = f'''<svg width="{width}" height="{height}" style="display:inline-block;vertical-align:middle;">
+        <polyline fill="none" stroke="{color}" stroke-width="2" points="{' '.join(points)}"/>
+    </svg>'''
+    return svg
+
+
+def get_weekly_trend(df_weekly: pd.DataFrame, user_name: str) -> list:
+    """특정 직원의 주별 추이 데이터 반환"""
+    user_data = df_weekly[df_weekly['target_user_name'] == user_name]
+    if user_data.empty:
+        return []
+    return user_data['count'].tolist()
 
 
 # --- 사이드바 ---
@@ -162,302 +231,376 @@ df_emp_eval = data["emp_eval"]
 df_ai_eval = data["ai_eval"]
 df_users = data["users"]
 prev_month_count = data["prev_month_count"]
+df_weekly = data["weekly"]
 
 # --- 사이드바 필터 (데이터 로드 후) ---
 with st.sidebar:
     st.divider()
     
-    # 직원 필터
-    st.subheader("👤 직원 필터")
+    # 직원 바로가기 (라디오 버튼)
+    st.subheader("👤 직원 선택")
     user_names = df_users['name'].tolist() if not df_users.empty else []
-    selected_users = st.multiselect(
-        "직원 선택",
-        options=user_names,
-        default=[],
-        placeholder="전체 직원",
-        key="selected_users"
-    )
     
-    # 카테고리 필터
-    categories = get_unique_values(df_emp_eval, 'category')
-    selected_categories = st.multiselect(
-        "카테고리",
-        options=categories,
-        default=[],
-        placeholder="전체 카테고리",
-        key="selected_categories"
-    )
-    
-    # 평가 유형 필터
-    eval_types = get_unique_values(df_emp_eval, 'evaluation_type')
-    selected_eval_types = st.multiselect(
-        "평가 유형",
-        options=eval_types,
-        default=[],
-        placeholder="전체 유형",
-        key="selected_eval_types"
-    )
-    
-    st.divider()
-    
-    # 직원 바로가기
-    st.subheader("⚡ 직원 바로가기")
     if not df_users.empty:
-        selected_quick_user = st.radio(
+        selected_user = st.radio(
             "직원 선택",
-            options=["전체"] + user_names,
+            options=["전체 보기"] + user_names,
             index=0,
-            key="quick_user_select",
+            key="selected_user",
             label_visibility="collapsed"
         )
     else:
-        selected_quick_user = "전체"
+        selected_user = "전체 보기"
         st.info("재직 중인 직원이 없습니다.")
 
-# --- 필터 적용 ---
-def apply_filters(df: pd.DataFrame, user_col: str = 'target_user_name') -> pd.DataFrame:
-    """필터 조건 적용"""
-    filtered = df.copy()
-    
-    # 직원 바로가기 우선 적용
-    if selected_quick_user != "전체" and user_col in filtered.columns:
-        filtered = filtered[filtered[user_col] == selected_quick_user]
-    # 직원 멀티셀렉트 적용
-    elif selected_users and user_col in filtered.columns:
-        filtered = filtered[filtered[user_col].isin(selected_users)]
-    
-    # 카테고리 필터
-    if selected_categories and 'category' in filtered.columns:
-        filtered = filtered[filtered['category'].isin(selected_categories)]
-    
-    # 평가 유형 필터
-    if selected_eval_types and 'evaluation_type' in filtered.columns:
-        filtered = filtered[filtered['evaluation_type'].isin(selected_eval_types)]
-    
-    return filtered
+
+# --- 필터 적용 함수 ---
+def apply_user_filter(df: pd.DataFrame, user_col: str = 'target_user_name') -> pd.DataFrame:
+    """직원 필터 적용"""
+    if selected_user != "전체 보기" and user_col in df.columns:
+        return df[df[user_col] == selected_user]
+    return df.copy()
 
 
 # 필터 적용
-df_emp_filtered = apply_filters(df_emp_eval)
-df_ai_filtered = df_ai_eval.copy()  # AI 평가는 직원 필터 없음
+df_emp_filtered = apply_user_filter(df_emp_eval)
+df_ai_filtered = df_ai_eval.copy()
+
+# 개별 직원 선택 여부
+is_individual_view = selected_user != "전체 보기"
 
 # --- 메인 대시보드 ---
 st.title("직원 관리 현황")
 st.caption(f"분석 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
 
 # ============================================
-# Section 1: 핵심 지표 (KPI Metrics)
+# 탭 구성
 # ============================================
-st.markdown("---")
-st.subheader("📈 핵심 지표")
-
-col1, col2, col3, col4 = st.columns(4)
-
-# 1. 총 지적 횟수
-total_issues = len(df_emp_filtered)
-with col1:
-    st.metric(
-        label="총 지적 횟수",
-        value=f"{total_issues:,}건"
-    )
-
-# 2. 전월 대비 증감
-current_month_count = len(df_emp_filtered[
-    pd.to_datetime(df_emp_filtered['evaluation_date']).dt.month == today.month
-]) if not df_emp_filtered.empty else 0
-delta = current_month_count - prev_month_count
-delta_str = f"+{delta}" if delta > 0 else str(delta)
-
-with col2:
-    st.metric(
-        label="전월 대비 증감",
-        value=f"{current_month_count:,}건",
-        delta=f"{delta_str}건" if prev_month_count > 0 else "N/A"
-    )
-
-# 3. 평균 평가 점수
-avg_score = df_emp_filtered['score'].mean() if not df_emp_filtered.empty and 'score' in df_emp_filtered.columns else 0
-with col3:
-    st.metric(
-        label="평균 평가 점수",
-        value=f"{avg_score:.2f}" if avg_score else "N/A"
-    )
-
-# 4. AI 품질 우수율
-if not df_ai_filtered.empty and 'grade_code' in df_ai_filtered.columns:
-    excellent_count = len(df_ai_filtered[df_ai_filtered['grade_code'] == '우수'])
-    total_ai = len(df_ai_filtered)
-    excellent_rate = (excellent_count / total_ai * 100) if total_ai > 0 else 0
-else:
-    excellent_rate = 0
-
-with col4:
-    st.metric(
-        label="AI 품질 우수율",
-        value=f"{excellent_rate:.1f}%"
-    )
+tab1, tab2, tab3 = st.tabs(["📊 통계 분석", "📋 직원별 명단", "📝 개별 리포트"])
 
 # ============================================
-# Section 2: 트렌드 분석 (Charts)
+# 탭 1: 통계 분석 (Bird's Eye View)
 # ============================================
-st.markdown("---")
-st.subheader("평가 분석")
-
-if not df_emp_filtered.empty:
-    # 날짜별, 평가유형별 집계
-    df_trend = df_emp_filtered.copy()
-    df_trend['evaluation_date'] = pd.to_datetime(df_trend['evaluation_date'])
+with tab1:
+    # KPI 카드
+    st.subheader("핵심 지표")
     
-    trend_data = df_trend.groupby(
-        [df_trend['evaluation_date'].dt.date, 'evaluation_type']
-    ).size().reset_index(name='count')
-    trend_data.columns = ['date', 'evaluation_type', 'count']
-    trend_data['date'] = pd.to_datetime(trend_data['date'])
+    col1, col2, col3 = st.columns(3)
     
-    # Altair 라인 차트
-    line_chart = alt.Chart(trend_data).mark_line(point=True).encode(
-        x=alt.X('date:T', title='날짜', axis=alt.Axis(format='%Y-%m-%d')),
-        y=alt.Y('count:Q', title='횟수'),
-        color=alt.Color('evaluation_type:N', title='평가 유형', 
-                       scale=alt.Scale(scheme='category10')),
-        tooltip=[
-            alt.Tooltip('date:T', title='날짜', format='%Y-%m-%d'),
-            alt.Tooltip('evaluation_type:N', title='유형'),
-            alt.Tooltip('count:Q', title='횟수')
-        ]
-    ).properties(
-        height=350
-    ).interactive()
+    # 1. 총 지적 건수
+    total_issues = len(df_emp_filtered)
+    with col1:
+        st.metric(label="총 지적 건수", value=f"{total_issues:,}건")
     
-    st.altair_chart(line_chart, use_container_width=True)
-else:
-    st.info("선택한 기간에 해당하는 직원 평가 데이터가 없습니다.")
-
-# ============================================
-# Section 3: AI 및 카테고리 분석 (Charts)
-# ============================================
-st.markdown("---")
-st.subheader("🤖 AI 및 카테고리 분석")
-
-chart_col1, chart_col2 = st.columns(2)
-
-# Left: AI 평가 등급 분포 (Donut Chart)
-with chart_col1:
-    st.markdown("##### AI 평가 등급 분포")
+    # 2. 가장 많은 지적 유형
+    if not df_emp_filtered.empty:
+        top_type = df_emp_filtered['evaluation_type'].value_counts().idxmax()
+        top_type_count = df_emp_filtered['evaluation_type'].value_counts().max()
+    else:
+        top_type = "N/A"
+        top_type_count = 0
+    with col2:
+        st.metric(label="가장 많은 지적 유형", value=f"{top_type}", delta=f"{top_type_count}건")
     
-    if not df_ai_filtered.empty and 'grade_code' in df_ai_filtered.columns:
-        grade_counts = df_ai_filtered['grade_code'].value_counts().reset_index()
-        grade_counts.columns = ['grade', 'count']
+    # 3. 집중 관리 필요 직원 (5건 이상)
+    if not df_emp_eval.empty:
+        user_counts = df_emp_eval.groupby('target_user_name').size()
+        high_risk_count = (user_counts >= 5).sum()
+    else:
+        high_risk_count = 0
+    with col3:
+        st.metric(label="집중 관리 필요 (5건↑)", value=f"{high_risk_count}명")
+    
+    st.markdown("---")
+    
+    # 평가 분석 실선 그래프
+    st.subheader("평가 추이 분석")
+    
+    # 전체 인원 개수 표시
+    total_employees = df_emp_eval['target_user_name'].nunique() if not df_emp_eval.empty else 0
+    st.caption(f"전체 평가 대상 인원: {total_employees}명")
+    
+    if not df_emp_filtered.empty:
+        df_trend = df_emp_filtered.copy()
+        df_trend['evaluation_date'] = pd.to_datetime(df_trend['evaluation_date'])
         
-        # 등급 순서 정의
-        grade_order = ['우수', '평균', '개선', '불량']
-        grade_counts['grade'] = pd.Categorical(
-            grade_counts['grade'], 
-            categories=grade_order, 
-            ordered=True
-        )
-        grade_counts = grade_counts.sort_values('grade')
+        # 5개 평가유형별 집계
+        eval_types = ['누락', '내용부족', '오타', '문법', '오류']
         
-        # 색상 매핑
-        color_scale = alt.Scale(
-            domain=['우수', '평균', '개선', '불량'],
-            range=['#28a745', '#17a2b8', '#ffc107', '#dc3545']
+        trend_data = df_trend.groupby(
+            [df_trend['evaluation_date'].dt.date, 'evaluation_type']
+        ).size().reset_index(name='count')
+        trend_data.columns = ['date', 'evaluation_type', 'count']
+        trend_data['date'] = pd.to_datetime(trend_data['date'])
+        
+        # 모든 날짜와 평가유형 조합 생성 (빈 날짜도 0으로 표시)
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        all_combinations = pd.MultiIndex.from_product(
+            [date_range, eval_types], names=['date', 'evaluation_type']
+        ).to_frame(index=False)
+        
+        trend_data = all_combinations.merge(
+            trend_data, on=['date', 'evaluation_type'], how='left'
+        ).fillna(0)
+        trend_data['count'] = trend_data['count'].astype(int)
+        
+        # 평가유형별 색상 지정
+        type_colors = alt.Scale(
+            domain=['누락', '내용부족', '오타', '문법', '오류'],
+            range=['#dc3545', '#fd7e14', '#ffc107', '#20c997', '#6f42c1']
         )
         
-        donut_chart = alt.Chart(grade_counts).mark_arc(innerRadius=50).encode(
-            theta=alt.Theta('count:Q'),
-            color=alt.Color('grade:N', title='등급', scale=color_scale),
+        # Altair 다중 실선 차트
+        line_chart = alt.Chart(trend_data).mark_line(
+            strokeWidth=2,
+            point=True
+        ).encode(
+            x=alt.X('date:T', title='날짜', axis=alt.Axis(format='%m/%d')),
+            y=alt.Y('count:Q', title='건수'),
+            color=alt.Color('evaluation_type:N', title='평가 유형', scale=type_colors),
             tooltip=[
-                alt.Tooltip('grade:N', title='등급'),
+                alt.Tooltip('date:T', title='날짜', format='%Y-%m-%d'),
+                alt.Tooltip('evaluation_type:N', title='유형'),
                 alt.Tooltip('count:Q', title='건수')
             ]
         ).properties(
             height=300
-        )
+        ).interactive()
         
-        st.altair_chart(donut_chart, use_container_width=True)
+        st.altair_chart(line_chart, use_container_width=True)
     else:
-        st.info("AI 평가 데이터가 없습니다.")
-
-# Right: 카테고리별 지적 횟수 (Bar Chart)
-with chart_col2:
-    st.markdown("##### 카테고리별 지적 횟수")
+        st.info("선택한 기간에 해당하는 평가 데이터가 없습니다.")
     
-    if not df_emp_filtered.empty and 'category' in df_emp_filtered.columns:
-        category_counts = df_emp_filtered['category'].value_counts().reset_index()
-        category_counts.columns = ['category', 'count']
+    st.markdown("---")
+    
+    # 차트 영역
+    chart_col1, chart_col2 = st.columns(2)
+    
+    # AI 평가 등급 분포 (Donut Chart)
+    with chart_col1:
+        st.subheader("AI 평가 등급 분포")
         
-        bar_chart = alt.Chart(category_counts).mark_bar().encode(
-            x=alt.X('category:N', title='카테고리', sort='-y'),
-            y=alt.Y('count:Q', title='횟수'),
-            color=alt.Color('category:N', legend=None, scale=alt.Scale(scheme='blues')),
-            tooltip=[
-                alt.Tooltip('category:N', title='카테고리'),
-                alt.Tooltip('count:Q', title='횟수')
-            ]
-        ).properties(
-            height=300
+        if not df_ai_filtered.empty and 'grade_code' in df_ai_filtered.columns:
+            grade_counts = df_ai_filtered['grade_code'].value_counts().reset_index()
+            grade_counts.columns = ['grade', 'count']
+            
+            grade_order = ['우수', '평균', '개선', '불량']
+            grade_counts['grade'] = pd.Categorical(
+                grade_counts['grade'], categories=grade_order, ordered=True
+            )
+            grade_counts = grade_counts.sort_values('grade')
+            
+            color_scale = alt.Scale(
+                domain=['우수', '평균', '개선', '불량'],
+                range=['#28a745', '#17a2b8', '#ffc107', '#dc3545']
+            )
+            
+            donut_chart = alt.Chart(grade_counts).mark_arc(innerRadius=50).encode(
+                theta=alt.Theta('count:Q'),
+                color=alt.Color('grade:N', title='등급', scale=color_scale),
+                tooltip=[
+                    alt.Tooltip('grade:N', title='등급'),
+                    alt.Tooltip('count:Q', title='건수')
+                ]
+            ).properties(height=280)
+            
+            st.altair_chart(donut_chart, use_container_width=True)
+        else:
+            st.info("AI 평가 데이터가 없습니다.")
+    
+    # 카테고리별 지적 횟수 (Bar Chart)
+    with chart_col2:
+        st.subheader("카테고리별 지적 현황")
+        
+        if not df_emp_filtered.empty and 'category' in df_emp_filtered.columns:
+            category_counts = df_emp_filtered['category'].value_counts().reset_index()
+            category_counts.columns = ['category', 'count']
+            
+            bar_chart = alt.Chart(category_counts).mark_bar().encode(
+                x=alt.X('category:N', title='카테고리', sort='-y'),
+                y=alt.Y('count:Q', title='건수'),
+                color=alt.Color('category:N', legend=None, scale=alt.Scale(scheme='blues')),
+                tooltip=[
+                    alt.Tooltip('category:N', title='카테고리'),
+                    alt.Tooltip('count:Q', title='건수')
+                ]
+            ).properties(height=280)
+            
+            st.altair_chart(bar_chart, use_container_width=True)
+        else:
+            st.info("직원 평가 데이터가 없습니다.")
+
+# ============================================
+# 탭 2: 직원별 명단 (랭킹 테이블)
+# ============================================
+with tab2:
+    st.subheader("직원별 지적 현황 랭킹")
+    
+    if not df_emp_eval.empty:
+        # 직원별 집계
+        employee_summary = df_emp_eval.groupby('target_user_name').agg(
+            총_지적_횟수=('emp_eval_id', 'count')
+        ).reset_index()
+        
+        # 주요 유형 (최빈값) 계산
+        mode_types = df_emp_eval.groupby('target_user_name')['evaluation_type'].agg(
+            lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A'
+        ).reset_index()
+        mode_types.columns = ['target_user_name', '주요_유형']
+        
+        employee_summary = employee_summary.merge(mode_types, on='target_user_name', how='left')
+        
+        # 정렬 및 순위 추가
+        employee_summary = employee_summary.sort_values('총_지적_횟수', ascending=False)
+        employee_summary['순위'] = range(1, len(employee_summary) + 1)
+        
+        # 컬럼 순서 재배치 (4주 추이 제거)
+        employee_summary = employee_summary[['순위', 'target_user_name', '총_지적_횟수', '주요_유형']]
+        employee_summary.columns = ['순위', '직원명', '지적 횟수', '주요 유형']
+        
+        # 테이블 표시
+        st.dataframe(
+            employee_summary,
+            column_config={
+                "순위": st.column_config.NumberColumn("순위", width="small"),
+                "직원명": st.column_config.TextColumn("직원명", width="medium"),
+                "지적 횟수": st.column_config.ProgressColumn(
+                    "지적 횟수",
+                    format="%d건",
+                    min_value=0,
+                    max_value=int(employee_summary['지적 횟수'].max()) if not employee_summary.empty else 10,
+                ),
+                "주요 유형": st.column_config.TextColumn("주요 유형", width="medium"),
+            },
+            hide_index=True,
+            use_container_width=True
         )
         
-        st.altair_chart(bar_chart, use_container_width=True)
+        st.caption("💡 왼쪽 사이드바에서 직원을 선택하면 '개별 리포트' 탭에서 상세 내용을 확인할 수 있습니다.")
     else:
         st.info("직원 평가 데이터가 없습니다.")
 
 # ============================================
-# Section 4: 직원별 상세 현황 (Dataframe)
+# 탭 3: 개별 리포트 (Deep Dive)
 # ============================================
-st.markdown("---")
-st.subheader("👥 직원별 상세 현황")
-
-if not df_emp_filtered.empty:
-    # 직원별 집계
-    employee_summary = df_emp_filtered.groupby('target_user_name').agg(
-        총_지적_횟수=('emp_eval_id', 'count'),
-        평균_점수=('score', 'mean'),
-        최근_코멘트=('comment', 'last')
-    ).reset_index()
-    
-    # 주요 유형 (최빈값) 계산
-    mode_types = df_emp_filtered.groupby('target_user_name')['evaluation_type'].agg(
-        lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A'
-    ).reset_index()
-    mode_types.columns = ['target_user_name', '주요_유형']
-    
-    employee_summary = employee_summary.merge(mode_types, on='target_user_name', how='left')
-    employee_summary.columns = ['직원명', '총 지적 횟수', '평균 점수', '최근 코멘트', '주요 유형']
-    employee_summary = employee_summary[['직원명', '총 지적 횟수', '주요 유형', '평균 점수', '최근 코멘트']]
-    
-    # 평균 점수 포맷팅
-    employee_summary['평균 점수'] = employee_summary['평균 점수'].round(2)
-    
-    # 최근 코멘트 길이 제한
-    employee_summary['최근 코멘트'] = employee_summary['최근 코멘트'].apply(
-        lambda x: (x[:50] + '...') if isinstance(x, str) and len(x) > 50 else x
-    )
-    
-    # 정렬
-    employee_summary = employee_summary.sort_values('총 지적 횟수', ascending=False)
-    
-    # 데이터프레임 표시 (컬럼 설정)
-    st.dataframe(
-        employee_summary,
-        column_config={
-            "직원명": st.column_config.TextColumn("직원명", width="medium"),
-            "총 지적 횟수": st.column_config.ProgressColumn(
-                "총 지적 횟수",
-                format="%d건",
-                min_value=0,
-                max_value=int(employee_summary['총 지적 횟수'].max()) if not employee_summary.empty else 10,
-            ),
-            "주요 유형": st.column_config.TextColumn("주요 유형", width="medium"),
-            "평균 점수": st.column_config.NumberColumn("평균 점수", format="%.2f"),
-            "최근 코멘트": st.column_config.TextColumn("최근 코멘트", width="large"),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
-else:
-    st.info("선택한 조건에 해당하는 데이터가 없습니다.")
+with tab3:
+    if is_individual_view:
+        # 개별 프로필 섹션
+        st.subheader(f"👤 {selected_user} 상세 리포트")
+        
+        user_data = df_emp_eval[df_emp_eval['target_user_name'] == selected_user]
+        
+        if not user_data.empty:
+            # 프로필 요약
+            profile_col1, profile_col2, profile_col3 = st.columns(3)
+            
+            total_user_issues = len(user_data)
+            top_user_type = user_data['evaluation_type'].value_counts().idxmax() if not user_data.empty else "N/A"
+            top_user_category = user_data['category'].value_counts().idxmax() if not user_data.empty else "N/A"
+            
+            with profile_col1:
+                st.metric("총 지적 횟수", f"{total_user_issues}건")
+            with profile_col2:
+                st.metric("주요 지적 유형", top_user_type)
+            with profile_col3:
+                st.metric("취약 카테고리", top_user_category)
+            
+            st.markdown("---")
+            
+            # 누락 유형별 분석
+            st.subheader("누락 유형별 분석")
+            
+            # 평가 유형별 지적 횟수 (막대그래프)
+            eval_types = ['누락', '내용부족', '오타', '문법', '오류']
+            type_data = user_data['evaluation_type'].value_counts().reset_index()
+            type_data.columns = ['type', 'count']
+            
+            # 모든 평가유형 포함
+            full_type_data = pd.DataFrame({'type': eval_types})
+            full_type_data = full_type_data.merge(type_data, on='type', how='left').fillna(0)
+            full_type_data['count'] = full_type_data['count'].astype(int)
+            
+            # 평가유형별 색상 지정
+            type_colors = alt.Scale(
+                domain=['누락', '내용부족', '오타', '문법', '오류'],
+                range=['#dc3545', '#fd7e14', '#ffc107', '#20c997', '#6f42c1']
+            )
+            
+            # 바 차트로 표현
+            type_bar = alt.Chart(full_type_data).mark_bar().encode(
+                x=alt.X('type:N', title='평가 유형', sort=eval_types),
+                y=alt.Y('count:Q', title='건수'),
+                color=alt.Color('type:N', title='유형', scale=type_colors, legend=None),
+                tooltip=[
+                    alt.Tooltip('type:N', title='유형'),
+                    alt.Tooltip('count:Q', title='건수')
+                ]
+            ).properties(height=250)
+            
+            # 건수 텍스트 표시
+            text = alt.Chart(full_type_data).mark_text(
+                align='center',
+                baseline='bottom',
+                dy=-5
+            ).encode(
+                x=alt.X('type:N', sort=eval_types),
+                y=alt.Y('count:Q'),
+                text=alt.Text('count:Q', format='d')
+            )
+            
+            st.altair_chart(type_bar + text, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # 평가 이력 테이블
+            st.subheader("📋 평가 이력")
+            
+            # 날짜순 정렬
+            user_data_sorted = user_data.sort_values('evaluation_date', ascending=False)
+            
+            # 데이터프레임 생성
+            eval_history_df = pd.DataFrame({
+                '평가일자': user_data_sorted['evaluation_date'].apply(
+                    lambda x: x.strftime('%Y-%m-%d') if isinstance(x, pd.Timestamp) else str(x)
+                ),
+                '해당날짜': user_data_sorted['target_date'].apply(
+                    lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and isinstance(x, (pd.Timestamp, date)) else ''
+                ),
+                '카테고리': user_data_sorted['category'],
+                '평가유형': user_data_sorted['evaluation_type'],
+                '코멘트': user_data_sorted['comment'].apply(
+                    lambda x: (x[:50] + '...') if isinstance(x, str) and len(x) > 50 else (x if pd.notna(x) else '')
+                )
+            })
+            
+            st.dataframe(
+                eval_history_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "평가일자": st.column_config.TextColumn("평가일자", width="small"),
+                    "해당날짜": st.column_config.TextColumn("해당날짜", width="small"),
+                    "카테고리": st.column_config.TextColumn("카테고리", width="small"),
+                    "평가유형": st.column_config.TextColumn("평가유형", width="small"),
+                    "코멘트": st.column_config.TextColumn("코멘트", width="large")
+                }
+            )
+        else:
+            st.info(f"{selected_user}님의 평가 기록이 없습니다.")
+    else:
+        st.info("👈 왼쪽 사이드바에서 직원을 선택하면 상세 리포트를 확인할 수 있습니다.")
+        
+        # 전체 요약 표시
+        st.subheader("전체 직원 요약")
+        if not df_emp_eval.empty:
+            summary_stats = df_emp_eval.groupby('target_user_name').size().describe()
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("평균 지적 건수", f"{summary_stats['mean']:.1f}건")
+            with col2:
+                st.metric("최대 지적 건수", f"{int(summary_stats['max'])}건")
+            with col3:
+                st.metric("총 평가 직원 수", f"{int(summary_stats['count'])}명")
 
 # --- 푸터 ---
 st.markdown("---")
