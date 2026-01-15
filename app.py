@@ -40,6 +40,10 @@ st.markdown("""
 </script>
 """, unsafe_allow_html=True)
 
+# Microsoft Clarity
+from modules.analytics import inject_clarity_tracking
+inject_clarity_tracking()
+
 st.markdown(
     """
     <style>
@@ -62,7 +66,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.title("주간보호센터 기록 관리 시스템")
+st.title("보은사랑 기록 관리 시스템")
 
 # --- 세션 상태 초기화 ---
 if "docs" not in st.session_state:
