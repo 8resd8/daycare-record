@@ -52,3 +52,5 @@ Thumbs.db
 desktop.ini
 
 *.pem
+
+node_modules/
