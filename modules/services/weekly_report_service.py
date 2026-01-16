@@ -24,7 +24,7 @@ class ReportService:
         input_content = self._format_input_data(customer_name, date_range, analysis_payload)
         
         try:
-            ai_client = get_ai_client()
+            ai_client = get_ai_client(provider='openai')
             response = ai_client.chat_completion(
                 model="gpt-4o-mini",
                 messages=[
