@@ -433,9 +433,9 @@ def render_ai_evaluation_tab():
             physical_evaluations.append({
                 "날짜": date,
                 "작성자": record.get("writer_phy", ""),
-                "원본 등급": "평가없음",
+                "등급": "평가없음",
                 "수정 제안": "미이용",
-                "원본 내용": physical_note
+                "원본 특이사항": physical_note
             })
         elif physical_note.strip():
             # DB에서 수정 제안과 등급 조회
@@ -452,9 +452,9 @@ def render_ai_evaluation_tab():
             physical_evaluations.append({
                 "날짜": date,
                 "작성자": record.get("writer_phy", ""),
-                "원본 등급": evaluation['grade'],
+                "등급": evaluation['grade'],
                 "수정 제안": evaluation['suggestion'],
-                "원본 내용": physical_note
+                "원본 특이사항": physical_note
             })
     
     if physical_evaluations:
@@ -462,7 +462,7 @@ def render_ai_evaluation_tab():
         
         # "개선" 등급의 행을 초록색으로 표시
         def highlight_improvement_physical(row):
-            return ['color: green' if row['원본 등급'] == '개선' else '' for _ in row]
+            return ['color: green' if row['등급'] == '개선' else '' for _ in row]
         
         styled_df = df_physical.style.apply(highlight_improvement_physical, axis=1)
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
@@ -491,9 +491,9 @@ def render_ai_evaluation_tab():
             cognitive_evaluations.append({
                 "날짜": date,
                 "작성자": record.get("writer_cog", ""),
-                "원본 등급": "평가없음",
+                "등급": "평가없음",
                 "수정 제안": "미이용",
-                "원본 내용": cognitive_note
+                "원본 특이사항": cognitive_note
             })
         elif cognitive_note.strip():
             # DB에서 수정 제안과 등급 조회
@@ -510,9 +510,9 @@ def render_ai_evaluation_tab():
             cognitive_evaluations.append({
                 "날짜": date,
                 "작성자": record.get("writer_cog", ""),
-                "원본 등급": evaluation['grade'],
+                "등급": evaluation['grade'],
                 "수정 제안": evaluation['suggestion'],
-                "원본 내용": cognitive_note
+                "원본 특이사항": cognitive_note
             })
     
     if cognitive_evaluations:
@@ -520,7 +520,7 @@ def render_ai_evaluation_tab():
         
         # "개선" 등급의 행을 초록색으로 표시
         def highlight_improvement_cognitive(row):
-            return ['color: green' if row['원본 등급'] == '개선' else '' for _ in row]
+            return ['color: green' if row['등급'] == '개선' else '' for _ in row]
         
         styled_df = df_cognitive.style.apply(highlight_improvement_cognitive, axis=1)
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
