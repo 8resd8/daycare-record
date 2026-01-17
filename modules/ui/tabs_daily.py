@@ -12,6 +12,7 @@ from modules.repositories.employee_evaluation import EmployeeEvaluationRepositor
 from modules.utils.enums import CategoryType, CategoryDisplay, RequiredFields, WriterFields, OptionalFields
 from datetime import date
 import time
+import concurrent.futures
 
 
 def render_ai_evaluation_tab():
@@ -341,71 +342,83 @@ def render_ai_evaluation_tab():
     st.divider()
 
     st.write("### 📝 특이사항 AI 평가 실행")
-    st.info("모든 날짜의 특이사항을 일괄 평가하여 수정 제안을 받습니다.")
+    st.info("현재 선택된 문서 내의 모든 수급자(전체 인원)에 대해 특이사항을 일괄 평가합니다.")
     
-    if st.button("🚀 전체 특이사항 평가 시작", type="primary"):
+    if st.button("🚀 전체 인원 특이사항 일괄 평가", type="primary"):
+        # 전체 인원 기록 수집
+        all_records = []
+        for r in active_doc.get("parsed_data", []):
+            if r.get("physical_note", "").strip() or r.get("cognitive_note", "").strip():
+                # 이미 평가된 결과가 있는지 확인 (중복 요청 방지)
+                customer_name = r.get('customer_name', '')
+                date_str = r.get('date', '')
+                record_id = evaluation_service.get_record_id(customer_name, date_str)
+                
+                # DB에서 이미 신체/인지 평가가 모두 있는지 확인
+                if record_id:
+                    phys_eval = evaluation_service.get_evaluation_from_db(record_id, 'SPECIAL_NOTE_PHYSICAL')
+                    cogn_eval = evaluation_service.get_evaluation_from_db(record_id, 'SPECIAL_NOTE_COGNITIVE')
+                    
+                    # 이미 평가가 완료된 건은 제외
+                    if phys_eval['grade'] != '평가없음' and cogn_eval['grade'] != '평가없음':
+                        continue
+                        
+                all_records.append(r)
+        
+        if not all_records:
+            st.success("모든 기록이 이미 평가되었거나 평가할 특이사항이 없습니다.")
+            return
+
         progress_bar = st.progress(0)
         status_text = st.empty()
-        total = len(person_records)
+        total = len(all_records)
         
-        # 평가 결과 저장용 딕셔너리
-        eval_results = []
-        
-        for i, record in enumerate(person_records):
-            date = record.get("date", "날짜 없음")
-            status_text.text(f"🔍 {date} 특이사항 평가 중... ({i+1}/{total})")
+        # 병렬 처리를 위한 함수 정의
+        def process_record(record):
+            date_str = record.get("date", "날짜 없음")
+            customer_name = record.get('customer_name', '')
+            physical_note = record.get("physical_note", "").strip()
+            cognitive_note = record.get("cognitive_note", "").strip()
             
-            physical_note = record.get("physical_note", "")
-            cognitive_note = record.get("cognitive_note", "")
-            
-            if physical_note.strip() or cognitive_note.strip():
-                with st.spinner(f"{date} 특이사항 평가 중..."):
-                    # 날짜별 독립 처리 - 누적 데이터 초기화
-                    result = evaluation_service.evaluate_special_note_with_ai(record)
-                    
-                    if result:
-                        # record_id 조회
-                        customer_name = record.get('customer_name', '')
-                        print(f"DEBUG: record_id 조회 - customer_name={customer_name}, date={date}")
-                        
-                        record_id = evaluation_service.get_record_id(
-                            customer_name,
-                            date
-                        )
-                        
-                        print(f"DEBUG: 조회된 record_id={record_id}")
-                        
-                        if record_id:
-                            # DB에 평가 결과 저장 (원본 특이사항 텍스트 추가)
-                            result_with_notes = result.copy()
-                            result_with_notes['physical_note'] = physical_note
-                            result_with_notes['cognitive_note'] = cognitive_note
-                            
-                            evaluation_service.save_special_note_evaluation(
-                                record_id, result_with_notes
-                            )
-                            print(f"DEBUG: DB 저장 완료 - record_id={record_id}")
-                        else:
-                            print(f"DEBUG: DB 저장 실패 - record_id를 찾을 수 없음")
-                        
-                        # 평가 결과 저장
-                        eval_result = {
-                            "date": date,
-                            "physical_note": physical_note,
-                            "cognitive_note": cognitive_note,
-                            "physical_result": result.get("physical", {}),
-                            "cognitive_result": result.get("cognitive", {}),
-                            "original_physical": result.get("original_physical", {}),
-                            "original_cognitive": result.get("original_cognitive", {})
-                        }
-                        eval_results.append(eval_result)
-            
-            progress_bar.progress((i + 1) / total)
+            try:
+                # 개별 호출 전 로그
+                print(f"DEBUG: Processing {customer_name} ({date_str})")
+                
+                result = evaluation_service.evaluate_special_note_with_ai(record)
+                if result:
+                    record_id = evaluation_service.get_record_id(customer_name, date_str)
+                    if record_id:
+                        result_with_notes = result.copy()
+                        result_with_notes['physical_note'] = physical_note
+                        result_with_notes['cognitive_note'] = cognitive_note
+                        evaluation_service.save_special_note_evaluation(record_id, result_with_notes)
+                return True
+            except Exception as e:
+                print(f"Error processing {customer_name} ({date_str}): {str(e)}")
+                return False
+
+        max_workers = 4
+        completed = 0
         
-        st.toast("전체 특이사항 평가가 완료되었습니다.", icon="✅")
+        # UI 업데이트용 컨테이너
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_record = {executor.submit(process_record, rec): rec for rec in all_records}
+            for future in concurrent.futures.as_completed(future_to_record):
+                try:
+                    # 각 작업의 결과를 기다림 (타임아웃 설정 가능)
+                    future.result(timeout=40) 
+                except concurrent.futures.TimeoutError:
+                    print("DEBUG: Task timed out")
+                except Exception as e:
+                    print(f"DEBUG: Task error: {e}")
+                
+                completed += 1
+                progress_bar.progress(completed / total)
+                status_text.text(f"⏳ 전체 인원 평가 진행 중... ({completed}/{total})")
         
-        # 평가 결과를 세션 상태에 저장
-        st.session_state.special_note_eval_results = eval_results
+        st.success(f"총 {total}건의 특이사항 평가가 완료되었습니다.")
+        time.sleep(1) # 결과 확인을 위한 잠시 대기
+        st.rerun()
 
     # 특이사항 평가 결과 테이블
     st.divider()
