@@ -606,167 +606,96 @@ def _batch_evaluate_all(person_entries):
 
 
 def _batch_evaluate_all_optimized(person_entries):
-    """성능 최적화된 전체 인원 특이사항 일괄 평가"""
+    """성능 최적화된 전체 인원 특이사항 일괄 평가
+    
+    탭의 빠른 로직과 동일하게 evaluate_special_note_with_ai를 사용하여
+    1번의 AI 호출로 신체/인지를 동시에 평가합니다.
+    """
     if not person_entries:
         st.warning("처리할 인원이 없습니다.")
         return
     
+    from modules.services.daily_report_service import evaluation_service
+    
     progress_bar = st.progress(0)
     status_text = st.empty()
-    total = len(person_entries)
     
-    # 모든 사람의 데이터를 한 번에 가져오기
-    all_records = {}
-    try:
-        from modules.db_connection import db_query
-        from modules.services.daily_report_service import evaluation_service
-        
-        with db_query() as cursor:
-            # 모든 고객 ID 미리 조회
-            customer_names = [entry["person_name"] for entry in person_entries]
-            placeholders = ', '.join(['%s'] * len(customer_names))
-            cursor.execute(
-                f"SELECT customer_id, name FROM customers WHERE name IN ({placeholders})",
-                customer_names
-            )
-            customer_map = {row["name"]: row["customer_id"] for row in cursor.fetchall()}
-            
-            # 모든 레코드 한 번에 조회
-            if customer_map:
-                customer_ids = list(customer_map.values())
-                placeholders = ', '.join(['%s'] * len(customer_ids))
-                cursor.execute(f"""
-                    SELECT di.record_id, di.customer_id, c.name as customer_name, di.date, 
-                           dp.note as physical_note, dc.note as cognitive_note, 
-                           dn.note as nursing_note, dr.note as functional_note,
-                           dp.writer_name as writer_physical, dc.writer_name as writer_cognitive, 
-                           dn.writer_name as writer_nursing, dr.writer_name as writer_recovery
-                    FROM daily_infos di
-                    LEFT JOIN customers c ON di.customer_id = c.customer_id
-                    LEFT JOIN daily_physicals dp ON dp.record_id = di.record_id
-                    LEFT JOIN daily_cognitives dc ON dc.record_id = di.record_id
-                    LEFT JOIN daily_nursings dn ON dn.record_id = di.record_id
-                    LEFT JOIN daily_recoveries dr ON dr.record_id = di.record_id
-                    WHERE di.customer_id IN ({placeholders})
-                    ORDER BY di.customer_id, di.date DESC
-                """, customer_ids)
-                
-                # 고객별로 그룹화
-                for row in cursor.fetchall():
-                    customer_id = row["customer_id"]
-                    if customer_id not in all_records:
-                        all_records[customer_id] = []
-                    all_records[customer_id].append({
-                        "record_id": row["record_id"],
-                        "customer_name": row["customer_name"],
-                        "date": row["date"],
-                        "physical_note": row["physical_note"],
-                        "cognitive_note": row["cognitive_note"],
-                        "nursing_note": row["nursing_note"],
-                        "functional_note": row["functional_note"],
-                        "writer_physical": row["writer_physical"],
-                        "writer_cognitive": row["writer_cognitive"],
-                        "writer_nursing": row["writer_nursing"],
-                        "writer_recovery": row["writer_recovery"]
-                    })
-    
-    except Exception as e:
-        st.error(f"데이터 조회 중 오류: {e}")
+    # 현재 active_doc에서 전체 레코드 수집
+    active_doc = get_active_doc()
+    if not active_doc or not active_doc.get("parsed_data"):
+        st.warning("평가할 데이터가 없습니다.")
         return
     
-    # 이미 평가된 항목 확인 (캐시 확인)
-    evaluated_cache = set()
-    try:
-        with db_query() as cursor:
-            if customer_map:
-                customer_ids = list(customer_map.values())
-                placeholders = ', '.join(['%s'] * len(customer_ids))
-                cursor.execute(f"""
-                    SELECT record_id, category FROM ai_evaluations 
-                    WHERE record_id IN (
-                        SELECT DISTINCT record_id FROM daily_infos 
-                        WHERE customer_id IN ({placeholders})
-                    )
-                """, customer_ids)
-                evaluated_cache = {(row["record_id"], row["category"]) for row in cursor.fetchall()}
-    except:
-        pass  # 캐시 실패 시 전체 평가 진행
-    
-    # 병렬 평가 처리
-    def evaluate_record_batch(args):
-        """레코드 배치 평가 함수"""
-        records, person_name = args
-        results = []
-        
-        # 카테고리 매핑 (영어 -> 한국어)
-        category_to_korean = {
-            "PHYSICAL": "신체",
-            "COGNITIVE": "인지"
-        }
-        
-        for record in records:
-            # 특이사항 평가는 PHYSICAL과 COGNITIVE만 수행
-            categories = [
-                ("PHYSICAL", record.get("physical_note", ""), record.get("writer_physical")),
-                ("COGNITIVE", record.get("cognitive_note", ""), record.get("writer_cognitive"))
-            ]
+    # 전체 인원 기록 수집 (탭과 동일한 로직)
+    all_records = []
+    for r in active_doc.get("parsed_data", []):
+        if r.get("physical_note", "").strip() or r.get("cognitive_note", "").strip():
+            # 이미 평가된 결과가 있는지 확인 (중복 요청 방지)
+            customer_name = r.get('customer_name', '')
+            date_str = r.get('date', '')
+            record_id = evaluation_service.get_record_id(customer_name, date_str)
             
-            for category, text, category_writer in categories:
-                # 캐시 확인 (한국어 카테고리로 확인)
-                korean_category = category_to_korean.get(category, category)
-                cache_key = (record["record_id"], korean_category)
-                if cache_key in evaluated_cache:
-                    continue
+            # DB에서 이미 신체/인지 평가가 모두 있는지 확인
+            if record_id:
+                phys_eval = evaluation_service.get_evaluation_from_db(record_id, 'SPECIAL_NOTE_PHYSICAL')
+                cogn_eval = evaluation_service.get_evaluation_from_db(record_id, 'SPECIAL_NOTE_COGNITIVE')
                 
-                # 빈 텍스트는 건너뛰기
-                if not text or text.strip() in ['특이사항 없음', '결석', '']:
+                # 이미 평가가 완료된 건은 제외
+                if phys_eval['grade'] != '평가없음' and cogn_eval['grade'] != '평가없음':
                     continue
-                
-                try:
-                    note_writer_id = record.get(f"writer_{category.lower()}_id", 1)
-                    evaluation_service.process_daily_note_evaluation(
-                        record_id=record["record_id"],
-                        category=category,
-                        note_text=text,
-                        note_writer_user_id=note_writer_id,
-                        writer=category_writer or "",
-                        customer_name=record.get("customer_name", ""),
-                        date=record.get("date", "")
-                    )
-                    results.append((record["record_id"], korean_category))
-                except Exception as e:
-                    print(f"평가 오류 ({person_name}, {category}): {e}")
-        
-        return results
+                    
+            all_records.append(r)
     
-    # ThreadPoolExecutor로 병렬 처리
-    from modules.utils.memory_utils import THREAD_MAX_WORKERS
-    completed_count = 0
-    with ThreadPoolExecutor(max_workers=THREAD_MAX_WORKERS) as executor:
-        # 각 사람의 데이터를 별도 태스크로 제출
-        futures = []
-        for entry in person_entries:
-            person_name = entry["person_name"]
-            customer_id = customer_map.get(person_name)
-            if customer_id and customer_id in all_records:
-                future = executor.submit(evaluate_record_batch, (all_records[customer_id], person_name))
-                futures.append((future, person_name))
+    if not all_records:
+        st.success("모든 기록이 이미 평가되었거나 평가할 특이사항이 없습니다.")
+        return
+    
+    total = len(all_records)
+    
+    # 병렬 처리를 위한 함수 정의 (탭과 동일한 로직)
+    def process_record(record):
+        date_str = record.get("date", "날짜 없음")
+        customer_name = record.get('customer_name', '')
+        physical_note = record.get("physical_note", "").strip()
+        cognitive_note = record.get("cognitive_note", "").strip()
         
-        # 완료된 태스크 처리
-        for idx, (future, person_name) in enumerate(futures):
-            # 평가 시작 표시
-            status_text.text(f"{person_name} 진행중 ({idx + 1}/{total})")
+        try:
+            print(f"DEBUG: Processing {customer_name} ({date_str})")
             
+            # 1번의 AI 호출로 신체/인지 동시 평가
+            result = evaluation_service.evaluate_special_note_with_ai(record)
+            if result:
+                record_id = evaluation_service.get_record_id(customer_name, date_str)
+                if record_id:
+                    result_with_notes = result.copy()
+                    result_with_notes['physical_note'] = physical_note
+                    result_with_notes['cognitive_note'] = cognitive_note
+                    evaluation_service.save_special_note_evaluation(record_id, result_with_notes)
+            return True
+        except Exception as e:
+            print(f"Error processing {customer_name} ({date_str}): {str(e)}")
+            return False
+
+    max_workers = 4
+    completed = 0
+    
+    # UI 업데이트용 컨테이너
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_record = {executor.submit(process_record, rec): rec for rec in all_records}
+        for future in concurrent.futures.as_completed(future_to_record):
             try:
-                future.result()
-                completed_count += 1
-                progress_bar.progress(completed_count / total)
+                future.result(timeout=40)
+            except concurrent.futures.TimeoutError:
+                print("DEBUG: Task timed out")
             except Exception as e:
-                st.error(f"❌ {person_name} 평가 중 오류: {e}")
-                completed_count += 1
-                progress_bar.progress(completed_count / total)
+                print(f"DEBUG: Task error: {e}")
+            
+            completed += 1
+            progress_bar.progress(completed / total)
+            status_text.text(f"⏳ 전체 인원 평가 진행 중... ({completed}/{total})")
     
-    status_text.text("✅ 모든 인원의 특이사항 평가가 완료되었습니다.")
+    st.success(f"총 {total}건의 특이사항 평가가 완료되었습니다.")
     st.toast("✅ 일괄 평가 완료!", icon="✅")
     st.rerun()
 

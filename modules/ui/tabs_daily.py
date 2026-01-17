@@ -342,12 +342,11 @@ def render_ai_evaluation_tab():
     st.divider()
 
     st.write("### 📝 특이사항 AI 평가 실행")
-    st.info("현재 선택된 문서 내의 모든 수급자(전체 인원)에 대해 특이사항을 일괄 평가합니다.")
-    
-    if st.button("🚀 전체 인원 특이사항 일괄 평가", type="primary"):
-        # 전체 인원 기록 수집
+
+    if st.button("🚀 현재 인원 특이사항 평가", type="primary"):
+        # 현재 선택된 수급자의 기록만 수집
         all_records = []
-        for r in active_doc.get("parsed_data", []):
+        for r in person_records:
             if r.get("physical_note", "").strip() or r.get("cognitive_note", "").strip():
                 # 이미 평가된 결과가 있는지 확인 (중복 요청 방지)
                 customer_name = r.get('customer_name', '')
@@ -414,7 +413,7 @@ def render_ai_evaluation_tab():
                 
                 completed += 1
                 progress_bar.progress(completed / total)
-                status_text.text(f"⏳ 전체 인원 평가 진행 중... ({completed}/{total})")
+                status_text.text(f"⏳ 특이사항 평가 진행 중... ({completed}/{total})")
         
         st.success(f"총 {total}건의 특이사항 평가가 완료되었습니다.")
         time.sleep(1) # 결과 확인을 위한 잠시 대기
