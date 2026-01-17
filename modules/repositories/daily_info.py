@@ -270,7 +270,7 @@ class DailyInfoRepository(BaseRepository):
     
     def _process_batch(self, batch: List[Dict], customer_map: Dict[str, int], 
                        existing_records: Dict[tuple, int]) -> int:
-        """배치 처리 - 단일 트랜잭션에서 벨크 삽입"""
+        """배치 처리 - 단일 트랜잭션에서 벨크 삽입/업데이트"""
         saved_count = 0
         
         with db_transaction() as cursor:
@@ -283,25 +283,45 @@ class DailyInfoRepository(BaseRepository):
                 record["customer_id"] = customer_id
                 date_str = str(record["date"])
                 
-                # 기존 레코드 삭제
+                # 기존 레코드 확인
                 existing_id = existing_records.get((customer_id, date_str))
-                if existing_id:
-                    self._delete_daily_record_in_transaction(cursor, existing_id)
                 
-                # 새 레코드 삽입
-                cursor.execute("""
-                    INSERT INTO daily_infos (
-                        customer_id, date, start_time, end_time,
-                        total_service_time, transport_service, transport_vehicles
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    customer_id, record["date"],
-                    record.get("start_time"), record.get("end_time"),
-                    record.get("total_service_time"),
-                    record.get("transport_service"),
-                    record.get("transport_vehicles")
-                ))
-                record_id = cursor.lastrowid
+                if existing_id:
+                    # 기존 레코드 업데이트 (record_id 유지)
+                    cursor.execute("""
+                        UPDATE daily_infos SET
+                            start_time = %s, end_time = %s,
+                            total_service_time = %s, transport_service = %s, transport_vehicles = %s
+                        WHERE record_id = %s
+                    """, (
+                        record.get("start_time"), record.get("end_time"),
+                        record.get("total_service_time"),
+                        record.get("transport_service"),
+                        record.get("transport_vehicles"),
+                        existing_id
+                    ))
+                    record_id = existing_id
+                    
+                    # 하위 레코드들 삭제 후 재삽입 (AI 평가는 유지됨)
+                    cursor.execute("DELETE FROM daily_physicals WHERE record_id=%s", (record_id,))
+                    cursor.execute("DELETE FROM daily_cognitives WHERE record_id=%s", (record_id,))
+                    cursor.execute("DELETE FROM daily_nursings WHERE record_id=%s", (record_id,))
+                    cursor.execute("DELETE FROM daily_recoveries WHERE record_id=%s", (record_id,))
+                else:
+                    # 새 레코드 삽입
+                    cursor.execute("""
+                        INSERT INTO daily_infos (
+                            customer_id, date, start_time, end_time,
+                            total_service_time, transport_service, transport_vehicles
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        customer_id, record["date"],
+                        record.get("start_time"), record.get("end_time"),
+                        record.get("total_service_time"),
+                        record.get("transport_service"),
+                        record.get("transport_vehicles")
+                    ))
+                    record_id = cursor.lastrowid
                 
                 # 하위 레코드들 삽입
                 self._insert_physicals_in_transaction(cursor, record_id, record)
