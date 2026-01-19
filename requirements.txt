@@ -19,6 +19,7 @@ mysql-connector-python==9.5.0
 # Utilities
 python-dateutil==2.9.0.post0
 tenacity==8.5.0
+python-dotenv==1.0.1
 
 # Testing
 pytest>=7.0.0

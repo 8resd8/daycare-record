@@ -2,6 +2,10 @@
 
 import os
 import streamlit as st
+from dotenv import load_dotenv
+
+# .env 파일 로드
+load_dotenv()
 
 def inject_clarity_tracking():
     # .env 파일에서 Clarity 프로젝트 ID 읽기
