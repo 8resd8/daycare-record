@@ -650,9 +650,9 @@ elif selected_tab == "📝 개별 리포트":
             # 날짜순 정렬
             user_data_sorted = user_data.sort_values('evaluation_date', ascending=False)
             
-            # 데이터프레임 생성 (_id는 내부 추적용, 사용자에게는 보이지 않음)
+            # 데이터프레임 생성 (ID는 숨김 처리)
             eval_history_df = pd.DataFrame({
-                '_id': user_data_sorted['emp_eval_id'],  # 내부 추적용 ID
+                'emp_eval_id': user_data_sorted['emp_eval_id'],
                 '평가일자': pd.to_datetime(user_data_sorted['evaluation_date']),
                 '해당날짜': pd.to_datetime(user_data_sorted['target_date'], errors='coerce'),
                 '카테고리': user_data_sorted['category'],
@@ -671,11 +671,7 @@ elif selected_tab == "📝 개별 리포트":
                 hide_index=True,
                 key="eval_history_editor",
                 column_config={
-                    "_id": st.column_config.NumberColumn(
-                        "ID",
-                        disabled=True,
-                        width="small"
-                    ),
+                    "emp_eval_id": None,  # 이 컬럼은 완전히 숨김
                     "평가일자": st.column_config.DateColumn(
                         "평가일자",
                         min_value=date(2020, 1, 1),
@@ -714,9 +710,9 @@ elif selected_tab == "📝 개별 리포트":
                     eval_repo = EmployeeEvaluationRepository()
                     changes_log = {"updated": 0, "deleted": 0}
                     
-                    # 삭제된 항목 확인 및 즉시 삭제 (_id 컬럼 기준)
-                    original_ids = set(eval_history_df['_id'].dropna().astype(int))
-                    current_ids = set(edited_eval_df['_id'].dropna().astype(int))
+                    # 삭제된 항목 확인 및 즉시 삭제 (emp_eval_id 컬럼 기준)
+                    original_ids = set(eval_history_df['emp_eval_id'].dropna().astype(int))
+                    current_ids = set(edited_eval_df['emp_eval_id'].dropna().astype(int))
                     deleted_ids = original_ids - current_ids
                     
                     # 삭제 실행 (확인 없이 바로)
@@ -726,7 +722,7 @@ elif selected_tab == "📝 개별 리포트":
                     
                     # 수정된 항목 처리
                     for idx, row in edited_eval_df.iterrows():
-                        emp_eval_id = row['_id']
+                        emp_eval_id = row['emp_eval_id']
                         if pd.notna(emp_eval_id) and int(emp_eval_id) in current_ids:
                             # 날짜 변환
                             eval_date = row['평가일자']
@@ -740,7 +736,7 @@ elif selected_tab == "📝 개별 리포트":
                                 target_date = None
                             
                             # 기존 데이터와 비교하여 변경된 경우만 업데이트
-                            original_row = eval_history_df[eval_history_df['_id'] == emp_eval_id].iloc[0]
+                            original_row = eval_history_df[eval_history_df['emp_eval_id'] == emp_eval_id].iloc[0]
                             
                             if (str(row['카테고리']) != str(original_row['카테고리']) or
                                 str(row['평가유형']) != str(original_row['평가유형']) or
