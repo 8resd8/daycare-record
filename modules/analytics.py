@@ -2,6 +2,7 @@
 
 import os
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 # .env 파일 로드
@@ -12,25 +13,49 @@ def inject_clarity_tracking():
     clarity_project_id = os.getenv('CLARITY_PROJECT_ID', '')
     
     if clarity_project_id:
-        clarity_script = f"""
-<script type="text/javascript">
-    (function(c,l,a,r,i,t,y){{
-        c[a]=c[a]||function(){{(c[a].q=c[a].q||[]).push(arguments)}};
-        t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
-        y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
-    }})(window, document, "clarity", "script", "{clarity_project_id}");
-</script>
+        # Clarity 스크립트를 부모 document의 head에 직접 삽입
+        clarity_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <script type="text/javascript">
+        (function() {{
+            try {{
+                var parentDoc = window.parent.document;
+                var clarityId = "{clarity_project_id}";
+                
+                // 이미 Clarity 스크립트가 있는지 확인
+                if (parentDoc.querySelector('script[src*="clarity.ms"]')) {{
+                    return;
+                }}
+                
+                // Clarity 초기화 함수 설정
+                window.parent.clarity = window.parent.clarity || function() {{
+                    (window.parent.clarity.q = window.parent.clarity.q || []).push(arguments);
+                }};
+                
+                // Clarity 스크립트 태그 생성
+                var script = parentDoc.createElement('script');
+                script.async = true;
+                script.src = "https://www.clarity.ms/tag/" + clarityId;
+                
+                // head에 스크립트 삽입
+                var head = parentDoc.getElementsByTagName('head')[0];
+                if (head) {{
+                    head.appendChild(script);
+                }}
+            }} catch(e) {{
+                console.log('Clarity injection error:', e);
+            }}
+        }})();
+    </script>
+</head>
+<body></body>
+</html>
 """
-        st.markdown(clarity_script, unsafe_allow_html=True)
+        components.html(clarity_html, height=0, width=0)
         st.session_state.clarity_enabled = True
     else:
-        # 개발 환경에서는 주석 처리된 코드 표시
-        development_script = """
-<!-- Microsoft Clarity 추적 코드 -->
-<!-- 프로젝트 ID가 설정되면 활성화됩니다 -->
-<!-- .env 파일에 CLARITY_PROJECT_ID=your_project_id 를 추가하세요 -->
-"""
-        st.markdown(development_script, unsafe_allow_html=True)
         st.session_state.clarity_enabled = False
 
 def get_clarity_status():

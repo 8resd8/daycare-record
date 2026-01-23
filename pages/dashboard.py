@@ -8,9 +8,13 @@ from datetime import date, timedelta, datetime
 from dateutil.relativedelta import relativedelta
 
 from modules.db_connection import get_db_connection
+from modules.analytics import inject_clarity_tracking
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="대시보드", layout="wide", page_icon="📊")
+
+# Microsoft Clarity
+inject_clarity_tracking()
 
 # --- 스타일링 ---
 st.markdown("""

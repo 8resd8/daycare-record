@@ -5,9 +5,13 @@ from datetime import date
 
 # 모듈 import
 from modules.customers import create_customer, delete_customer, list_customers, update_customer
+from modules.analytics import inject_clarity_tracking
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="수급자 관리", layout="wide", page_icon="👥")
+
+# Microsoft Clarity
+inject_clarity_tracking()
 
 # --- 스타일링 ---
 st.markdown("""
