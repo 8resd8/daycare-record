@@ -198,8 +198,8 @@ with st.sidebar:
     # 네비게이션 메뉴
     nav = st.radio(
         "메뉴",
-        options=["파일 처리", "수급자 관리", "대시보드"],
-        index=2,
+        options=["파일 처리", "수급자 관리", "직원 관리", "대시보드"],
+        index=3,
         horizontal=True,
         key="sidebar_nav_dashboard",
     )
@@ -207,6 +207,8 @@ with st.sidebar:
         st.switch_page("app.py")
     elif nav == "수급자 관리":
         st.switch_page("pages/customer_manage.py")
+    elif nav == "직원 관리":
+        st.switch_page("pages/employee_manage.py")
     
     st.header("🔍 필터 설정")
     
