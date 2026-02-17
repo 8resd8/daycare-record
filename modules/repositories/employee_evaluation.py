@@ -8,7 +8,7 @@ class EmployeeEvaluationRepository(BaseRepository):
     
     def save_evaluation(
         self,
-        record_id: int,
+        record_id: Optional[int],
         target_user_id: int,
         category: str,
         evaluation_type: str,
@@ -18,7 +18,22 @@ class EmployeeEvaluationRepository(BaseRepository):
         score: int = 1,
         comment: str = None
     ) -> int:
-        """Save employee evaluation and return the inserted ID."""
+        """Save employee evaluation and return the inserted ID.
+        
+        Args:
+            record_id: 연결된 daily_infos 레코드 ID (직접 추가 시 None 가능)
+            target_user_id: 평가 대상 직원 ID
+            category: 평가 카테고리
+            evaluation_type: 평가 유형
+            evaluation_date: 평가 일자
+            target_date: 해당 날짜
+            evaluator_user_id: 평가자 ID
+            score: 점수
+            comment: 코멘트
+            
+        Returns:
+            생성된 emp_eval_id
+        """
         insert_query = '''
             INSERT INTO employee_evaluations (
                 record_id, target_date, target_user_id, evaluator_user_id,
