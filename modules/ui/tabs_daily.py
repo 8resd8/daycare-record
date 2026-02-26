@@ -334,9 +334,11 @@ def render_ai_evaluation_tab():
                 customer_info_data = []
                 for display_name, field_name in OptionalFields.CUSTOMER_INFO.items():
                     value = first_record.get(field_name, "-")
-                    customer_info_data.append({"항목": display_name, "값": value})
+                    customer_info_data.append({"항목": display_name, "값": str(value)})
                 
                 df_customer = pd.DataFrame(customer_info_data)
+                if "값" in df_customer.columns:
+                    df_customer["값"] = df_customer["값"].astype(str)
                 st.dataframe(df_customer, use_container_width=True, hide_index=True)
 
     st.divider()

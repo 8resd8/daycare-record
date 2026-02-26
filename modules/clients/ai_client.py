@@ -11,9 +11,13 @@
 
 import os
 import openai
-import google.generativeai as genai
 from typing import Optional, Any, List, Dict
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+try:
+    import google.generativeai as genai
+except ModuleNotFoundError:  # pragma: no cover
+    genai = None
 
 # AI Client instance for dependency injection (테스트용)
 _ai_client_instance: Optional['BaseAIClient'] = None
@@ -57,6 +61,12 @@ class GeminiClient(BaseAIClient):
     """Google Gemini 클라이언트 래퍼 클래스"""
     
     def __init__(self, api_key: str):
+        if genai is None:
+            raise ModuleNotFoundError(
+                "google-generativeai 패키지가 설치되어 있지 않습니다. "
+                "Gemini를 사용하려면 requirements.txt의 google-generativeai를 설치하세요."
+            )
+
         genai.configure(api_key=api_key)
         self._api_key = api_key
     
@@ -180,6 +190,11 @@ def get_ai_client(provider: str = 'gemini') -> BaseAIClient:
     # 일반 환경에서는 새 클라이언트 생성
     api_key = get_api_key(provider)
     if provider == 'gemini':
+        if genai is None:
+            raise ModuleNotFoundError(
+                "google-generativeai 패키지가 설치되어 있지 않습니다. "
+                "Gemini를 사용하려면 requirements.txt의 google-generativeai를 설치하세요."
+            )
         return GeminiClient(api_key)
     else:
         client = openai.OpenAI(api_key=api_key)
@@ -193,6 +208,11 @@ def _get_cached_ai_client(provider: str = 'gemini') -> BaseAIClient:
     def _create_client(prov: str):
         api_key = get_api_key(prov)
         if prov == 'gemini':
+            if genai is None:
+                raise ModuleNotFoundError(
+                    "google-generativeai 패키지가 설치되어 있지 않습니다. "
+                    "Gemini를 사용하려면 requirements.txt의 google-generativeai를 설치하세요."
+                )
             return GeminiClient(api_key)
         else:
             client = openai.OpenAI(api_key=api_key)

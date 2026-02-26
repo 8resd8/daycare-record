@@ -7,8 +7,6 @@ from modules.clients.daily_prompt import get_special_note_prompt
 from modules.repositories import AiEvaluationRepository
 from modules.repositories.base import BaseRepository
 from modules.clients.ai_client import get_ai_client
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
 
@@ -320,6 +318,15 @@ class EvaluationService:
                 "physical": result["physical_candidates"][0],
                 "cognitive": result["cognitive_candidates"][0]
             }
+
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+        except Exception:
+            # scikit-learn / scipy 네이티브 확장 로딩 실패(또는 미설치) 시 fallback
+            return {
+                "physical": result["physical_candidates"][0],
+                "cognitive": result["cognitive_candidates"][0]
+            }
         
         # TF-IDF 벡터라이저 초기화
         vectorizer = TfidfVectorizer()
@@ -346,9 +353,15 @@ class EvaluationService:
         }
     
     def _find_least_similar(self, candidates: List[str], references: List[str], 
-                           vectorizer: TfidfVectorizer) -> str:
+                           vectorizer: Any) -> str:
         """후보 중에서 참조 문장들과 가장 유사도가 낮은 문장 찾기"""
         if not references:
+            return candidates[0]
+
+        try:
+            from sklearn.metrics.pairwise import cosine_similarity
+        except Exception:
+            # scikit-learn / scipy 네이티브 확장 로딩 실패(또는 미설치) 시 fallback
             return candidates[0]
         
         # 모든 문장 결합하여 TF-IDF 벡터 생성

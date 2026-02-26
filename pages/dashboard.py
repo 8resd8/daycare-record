@@ -198,8 +198,8 @@ with st.sidebar:
     # 네비게이션 메뉴
     nav = st.radio(
         "메뉴",
-        options=["파일 처리", "수급자 관리", "대시보드"],
-        index=2,
+        options=["파일 처리", "수급자 관리", "직원 관리", "대시보드"],
+        index=3,
         horizontal=True,
         key="sidebar_nav_dashboard",
     )
@@ -207,6 +207,8 @@ with st.sidebar:
         st.switch_page("app.py")
     elif nav == "수급자 관리":
         st.switch_page("pages/customer_manage.py")
+    elif nav == "직원 관리":
+        st.switch_page("pages/employee_manage.py")
     
     st.header("🔍 필터 설정")
     
@@ -657,6 +659,7 @@ elif selected_tab == "📝 개별 리포트":
             # 데이터프레임 생성 (ID는 숨김 처리)
             eval_history_df = pd.DataFrame({
                 'emp_eval_id': user_data_sorted['emp_eval_id'],
+                'record_id': user_data_sorted['record_id'],
                 '평가일자': pd.to_datetime(user_data_sorted['evaluation_date']),
                 '해당날짜': pd.to_datetime(user_data_sorted['target_date'], errors='coerce'),
                 '카테고리': user_data_sorted['category'],
@@ -667,78 +670,140 @@ elif selected_tab == "📝 개별 리포트":
             # DB enum 기준 기본값 보정 (NOT NULL 컬럼)
             eval_history_df['카테고리'] = eval_history_df['카테고리'].fillna('공통')
             eval_history_df['평가유형'] = eval_history_df['평가유형'].fillna('누락')
+
+            # record_id 기본값(신규 행 추가 시 사용)
+            default_record_id = None
+            if 'record_id' in eval_history_df.columns:
+                _record_series = eval_history_df['record_id'].dropna()
+                default_record_id = int(_record_series.iloc[0]) if not _record_series.empty else None
+
+            # 편집용 데이터프레임을 session_state로 단일화 (버튼 클릭 시에도 최신 편집값 유지)
+            editor_state_key = f"eval_history_editor_df_{selected_user}"
+            if editor_state_key not in st.session_state:
+                st.session_state[editor_state_key] = eval_history_df.copy()
+
+            form_key = f"eval_history_form_{selected_user}"
+            with st.form(key=form_key, clear_on_submit=False):
+                edited_eval_df = st.data_editor(
+                    st.session_state[editor_state_key],
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    hide_index=True,
+                    key=f"eval_history_editor_{selected_user}",
+                    column_config={
+                        "emp_eval_id": None,  # 이 컬럼은 완전히 숨김
+                        "record_id": None,  # FK NOT NULL이지만 UI에선 숨김
+                        "평가일자": st.column_config.DateColumn(
+                            "평가일자",
+                            min_value=date(2020, 1, 1),
+                            max_value=date.today(),
+                            format="YYYY-MM-DD",
+                            width="small"
+                        ),
+                        "해당날짜": st.column_config.DateColumn(
+                            "해당날짜",
+                            min_value=date(2020, 1, 1),
+                            max_value=date.today(),
+                            format="YYYY-MM-DD",
+                            width="small"
+                        ),
+                        "카테고리": st.column_config.SelectboxColumn(
+                            "카테고리",
+                            options=["공통", "신체", "인지", "간호", "기능"],
+                            required=True,
+                            width="small"
+                        ),
+                        "평가유형": st.column_config.SelectboxColumn(
+                            "평가유형",
+                            options=['누락', '내용부족', '오타', '문법', '오류'],
+                            required=True,
+                            width="small"
+                        ),
+                        "코멘트": st.column_config.TextColumn("코멘트", width="large")
+                    }
+                )
+
+                save_submitted = st.form_submit_button(
+                    "💾 변경사항 저장",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            # data_editor 결과를 session_state에 즉시 반영
+            st.session_state[editor_state_key] = edited_eval_df
             
-            edited_eval_df = st.data_editor(
-                eval_history_df,
-                use_container_width=True,
-                num_rows="dynamic",
-                hide_index=True,
-                key="eval_history_editor",
-                column_config={
-                    "emp_eval_id": None,  # 이 컬럼은 완전히 숨김
-                    "평가일자": st.column_config.DateColumn(
-                        "평가일자",
-                        min_value=date(2020, 1, 1),
-                        max_value=date.today(),
-                        format="YYYY-MM-DD",
-                        width="small"
-                    ),
-                    "해당날짜": st.column_config.DateColumn(
-                        "해당날짜",
-                        min_value=date(2020, 1, 1),
-                        max_value=date.today(),
-                        format="YYYY-MM-DD",
-                        width="small"
-                    ),
-                    "카테고리": st.column_config.SelectboxColumn(
-                        "카테고리",
-                        options=["공통", "신체", "인지", "간호", "기능"],
-                        required=True,
-                        width="small"
-                    ),
-                    "평가유형": st.column_config.SelectboxColumn(
-                        "평가유형",
-                        options=['누락', '내용부족', '오타', '문법', '오류'],
-                        required=True,
-                        width="small"
-                    ),
-                    "코멘트": st.column_config.TextColumn("코멘트", width="large")
-                }
-            )
-            
-            # 저장 버튼
-            if st.button("💾 변경사항 저장", type="primary", use_container_width=True, key="save_eval_changes"):
+            # 저장 처리 (form submit)
+            if save_submitted:
                 try:
                     from modules.repositories.employee_evaluation import EmployeeEvaluationRepository
                     
                     eval_repo = EmployeeEvaluationRepository()
-                    changes_log = {"updated": 0, "deleted": 0}
+                    changes_log = {"added": 0, "updated": 0, "deleted": 0}
+
+                    # 버튼 클릭 시점의 최신 편집값을 직접 사용
+                    edited_df = edited_eval_df
                     
                     # 삭제된 항목 확인 및 즉시 삭제 (emp_eval_id 컬럼 기준)
                     original_ids = set(eval_history_df['emp_eval_id'].dropna().astype(int))
-                    current_ids = set(edited_eval_df['emp_eval_id'].dropna().astype(int))
+                    current_ids = set(edited_df['emp_eval_id'].dropna().astype(int))
                     deleted_ids = original_ids - current_ids
                     
-                    # 삭제 실행 (확인 없이 바로)
+                    # 삭제 실행
                     for d_id in deleted_ids:
                         eval_repo.delete_evaluation(int(d_id))
                     changes_log["deleted"] = len(deleted_ids)
                     
-                    # 수정된 항목 처리
-                    for idx, row in edited_eval_df.iterrows():
+                    # 현재 사용자의 user_id 조회
+                    target_user_id = eval_repo.get_user_id_by_name(selected_user)
+                    if not target_user_id:
+                        raise ValueError(f"사용자 '{selected_user}'의 user_id를 찾을 수 없습니다.")
+                    
+                    # 수정 및 추가된 항목 처리
+                    for idx, row in edited_df.iterrows():
                         emp_eval_id = row['emp_eval_id']
-                        if pd.notna(emp_eval_id) and int(emp_eval_id) in current_ids:
-                            # 날짜 변환
-                            eval_date = row['평가일자']
-                            if isinstance(eval_date, pd.Timestamp):
-                                eval_date = eval_date.date()
-                            
-                            target_date = row['해당날짜']
-                            if pd.notna(target_date) and isinstance(target_date, pd.Timestamp):
-                                target_date = target_date.date()
-                            else:
-                                target_date = None
-                            
+
+                        # record_id 보정 (신규 행은 기본 record_id 사용)
+                        row_record_id = row.get('record_id') if isinstance(row, dict) else row['record_id']
+                        if pd.isna(row_record_id):
+                            row_record_id = default_record_id
+                        if pd.isna(row_record_id):
+                            row_record_id = None
+                        
+                        # 날짜 변환
+                        eval_date = row['평가일자']
+                        if isinstance(eval_date, pd.Timestamp):
+                            eval_date = eval_date.date()
+                        
+                        target_date = row['해당날짜']
+                        if pd.notna(target_date) and isinstance(target_date, pd.Timestamp):
+                            target_date = target_date.date()
+                        else:
+                            target_date = None
+                        
+                        # 새로 추가된 행 (emp_eval_id가 NaN인 경우) -> INSERT
+                        if pd.isna(emp_eval_id):
+                            if row_record_id is None:
+                                st.warning("새로 추가한 행은 record_id가 필요합니다. (기존 이력이 없는 직원은 여기서 직접 추가할 수 없습니다)")
+                                continue
+                            if pd.notna(row['카테고리']) and pd.notna(row['평가유형']):
+                                try:
+                                    eval_repo.save_evaluation(
+                                        record_id=int(row_record_id),
+                                        target_user_id=target_user_id,
+                                        category=str(row['카테고리']).strip(),
+                                        evaluation_type=str(row['평가유형']).strip(),
+                                        evaluation_date=eval_date if eval_date else date.today(),
+                                        target_date=target_date,
+                                        evaluator_user_id=1,
+                                        score=1,
+                                        comment=str(row['코멘트']) if pd.notna(row['코멘트']) else None
+                                    )
+                                    changes_log["added"] += 1
+                                except Exception as insert_error:
+                                    st.warning(f"행 추가 중 오류: {insert_error}")
+                        
+                        # 기존 행 수정 (emp_eval_id가 있는 경우) -> UPDATE
+                        elif int(emp_eval_id) in current_ids:
                             # 기존 데이터와 비교하여 변경된 경우만 업데이트
                             original_row = eval_history_df[eval_history_df['emp_eval_id'] == emp_eval_id].iloc[0]
                             
@@ -768,6 +833,7 @@ elif selected_tab == "📝 개별 리포트":
                     
                     # 결과 메시지 및 화면 갱신
                     msg = []
+                    if changes_log['added']: msg.append(f"{changes_log['added']}건 추가")
                     if changes_log['deleted']: msg.append(f"{changes_log['deleted']}건 삭제")
                     if changes_log['updated']: msg.append(f"{changes_log['updated']}건 수정")
                     
@@ -776,8 +842,10 @@ elif selected_tab == "📝 개별 리포트":
                     else:
                         st.toast("변경 사항이 없습니다.", icon="ℹ️")
                     
-                    # 캐시 클리어 후 데이터 새로고침
+                    # 캐시 클리어 및 session_state 정리 후 데이터 새로고침
                     load_dashboard_data.clear()
+                    if editor_state_key in st.session_state:
+                        del st.session_state[editor_state_key]
                     st.session_state.selected_tab = selected_tab
                     st.rerun()
                 
