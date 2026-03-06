@@ -426,3 +426,263 @@ class TestDailyInfoRepositoryHelpers:
         result = repo._bulk_find_existing_records(customer_map={}, records=[])
 
         assert result == {}
+
+    # ========== _bulk_get_or_create_customers (DB 호출) ==========
+
+    def test_bulk_get_or_create_customers_finds_existing(self, repo):
+        """기존 고객이 있으면 조회해서 맵에 추가"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [("홍길동", 1)]  # (name, customer_id) 순서로 반환
+
+        @contextmanager
+        def _mock_tx(dictionary=False):
+            yield mock_cursor
+
+        with patch('modules.repositories.daily_info.db_transaction', _mock_tx):
+            result = repo._bulk_get_or_create_customers(
+                records=[{"customer_name": "홍길동", "customer_birth_date": "1950-01-01",
+                          "customer_grade": "3등급", "customer_recognition_no": "L001"}],
+                customer_names=["홍길동"]
+            )
+        # 쿼리가 실행되었는지 확인
+        assert mock_cursor.execute.called
+
+    def test_bulk_get_or_create_customers_creates_new(self, repo):
+        """신규 고객은 INSERT 쿼리를 실행함"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []  # 기존 고객 없음
+        mock_cursor.lastrowid = 99
+
+        @contextmanager
+        def _mock_tx(dictionary=False):
+            yield mock_cursor
+
+        records = [{
+            "customer_name": "신규고객",
+            "customer_birth_date": "1960-01-01",
+            "customer_grade": "2등급",
+            "customer_recognition_no": "L999"
+        }]
+
+        with patch('modules.repositories.daily_info.db_transaction', _mock_tx):
+            result = repo._bulk_get_or_create_customers(records, ["신규고객"])
+
+        # INSERT 쿼리가 실행되었는지 확인
+        executed = [call[0][0] for call in mock_cursor.execute.call_args_list]
+        assert any("INSERT" in q.upper() for q in executed)
+
+    # ========== _bulk_find_existing_records (DB 호출) ==========
+
+    def test_bulk_find_existing_records_with_existing(self, repo):
+        """기존 레코드가 있으면 (customer_id, date) 키로 record_id 반환"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [
+            {'customer_id': 1, 'date': date(2024, 1, 15), 'record_id': 100}
+        ]
+
+        @contextmanager
+        def _mock_query(dictionary=True):
+            yield mock_cursor
+
+        customer_map = {"홍길동": 1}
+        records = [{"customer_name": "홍길동", "date": date(2024, 1, 15)}]
+
+        with patch('modules.repositories.daily_info.db_query', _mock_query):
+            result = repo._bulk_find_existing_records(customer_map, records)
+
+        assert (1, "2024-01-15") in result
+        assert result[(1, "2024-01-15")] == 100
+
+    def test_bulk_find_existing_records_no_matching_records(self, repo):
+        """레코드가 없으면 빈 딕셔너리 반환"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+
+        @contextmanager
+        def _mock_query(dictionary=True):
+            yield mock_cursor
+
+        customer_map = {"홍길동": 1}
+        records = [{"customer_name": "홍길동", "date": date(2024, 1, 15)}]
+
+        with patch('modules.repositories.daily_info.db_query', _mock_query):
+            result = repo._bulk_find_existing_records(customer_map, records)
+
+        assert result == {}
+
+    def test_bulk_find_existing_records_name_not_in_map(self, repo):
+        """고객 맵에 없는 이름은 건너뜀"""
+        customer_map = {"홍길동": 1}
+        records = [{"customer_name": "없는사람", "date": date(2024, 1, 15)}]
+
+        result = repo._bulk_find_existing_records(customer_map, records)
+        assert result == {}
+
+    # ========== _process_batch (신규/기존 레코드 처리) ==========
+
+    def _make_mock_cursor_with_queries(self):
+        cursor = MagicMock()
+        queries = []
+        cursor.execute.side_effect = lambda q, *a: queries.append(q)
+        cursor._queries = queries
+        return cursor
+
+    def test_process_batch_inserts_new_record(self, repo):
+        """새 레코드는 INSERT 쿼리를 실행"""
+        cursor = self._make_mock_cursor_with_queries()
+        cursor.lastrowid = 101
+
+        @contextmanager
+        def _mock_tx(dictionary=False):
+            yield cursor
+
+        record = {
+            "customer_name": "홍길동", "date": date(2024, 1, 15),
+            "start_time": "09:00", "end_time": "17:00",
+            "total_service_time": "480분", "transport_service": "제공",
+            "transport_vehicles": "12가3456",
+        }
+        customer_map = {"홍길동": 1}
+        existing_records = {}  # 기존 레코드 없음
+
+        with patch('modules.repositories.daily_info.db_transaction', _mock_tx):
+            count = repo._process_batch([record], customer_map, existing_records)
+
+        assert count == 1
+        assert any("INSERT" in q.upper() and "daily_infos" in q for q in cursor._queries)
+
+    def test_process_batch_updates_existing_record(self, repo):
+        """기존 레코드는 UPDATE 쿼리를 실행"""
+        cursor = self._make_mock_cursor_with_queries()
+
+        @contextmanager
+        def _mock_tx(dictionary=False):
+            yield cursor
+
+        record = {
+            "customer_name": "홍길동", "date": date(2024, 1, 15),
+            "start_time": "09:00", "end_time": "17:00",
+            "total_service_time": "480분", "transport_service": "제공",
+            "transport_vehicles": "", "customer_id": 1,
+        }
+        customer_map = {"홍길동": 1}
+        existing_records = {(1, "2024-01-15"): 200}  # 기존 레코드 존재
+
+        with patch('modules.repositories.daily_info.db_transaction', _mock_tx):
+            count = repo._process_batch([record], customer_map, existing_records)
+
+        assert count == 1
+        assert any("UPDATE" in q.upper() and "daily_infos" in q for q in cursor._queries)
+
+    def test_process_batch_skips_unknown_customer(self, repo):
+        """고객 맵에 없는 레코드는 건너뜀"""
+        cursor = self._make_mock_cursor_with_queries()
+
+        @contextmanager
+        def _mock_tx(dictionary=False):
+            yield cursor
+
+        record = {"customer_name": "알수없는사람", "date": date(2024, 1, 15)}
+        customer_map = {}
+        existing_records = {}
+
+        with patch('modules.repositories.daily_info.db_transaction', _mock_tx):
+            count = repo._process_batch([record], customer_map, existing_records)
+
+        assert count == 0
+
+    # ========== _get_or_create_customer_in_transaction ==========
+
+    def test_get_or_create_customer_existing(self, repo):
+        """기존 고객이 있으면 customer_id 반환, UPDATE 실행"""
+        cursor = MagicMock()
+        cursor.fetchone.return_value = (42,)  # 기존 customer_id
+
+        record = {
+            "customer_name": "홍길동",
+            "customer_birth_date": "1950-01-01",
+            "customer_grade": "3등급",
+            "customer_recognition_no": "L001"
+        }
+        result = repo._get_or_create_customer_in_transaction(cursor, record)
+
+        assert result == 42
+        # UPDATE 쿼리가 실행되었는지 확인
+        executed = [call[0][0] for call in cursor.execute.call_args_list]
+        assert any("UPDATE" in q.upper() for q in executed)
+
+    def test_get_or_create_customer_new(self, repo):
+        """기존 고객이 없으면 INSERT 실행, lastrowid 반환"""
+        cursor = MagicMock()
+        cursor.fetchone.return_value = None  # 기존 고객 없음
+        cursor.lastrowid = 99
+
+        record = {
+            "customer_name": "신규고객",
+            "customer_birth_date": "1960-01-01",
+            "customer_grade": "2등급",
+            "customer_recognition_no": "L999"
+        }
+        result = repo._get_or_create_customer_in_transaction(cursor, record)
+
+        assert result == 99
+        executed = [call[0][0] for call in cursor.execute.call_args_list]
+        assert any("INSERT" in q.upper() for q in executed)
+
+    # ========== _delete_daily_record_in_transaction ==========
+
+    def test_delete_daily_record_in_transaction_executes_all_deletes(self, repo):
+        """트랜잭션 내 삭제 시 모든 하위 테이블 삭제 쿼리 실행"""
+        cursor = MagicMock()
+        queries = []
+        cursor.execute.side_effect = lambda q, p: queries.append(q)
+
+        repo._delete_daily_record_in_transaction(cursor, 100)
+
+        assert any("daily_physicals" in q for q in queries)
+        assert any("daily_cognitives" in q for q in queries)
+        assert any("daily_nursings" in q for q in queries)
+        assert any("daily_recoveries" in q for q in queries)
+        assert any("daily_infos" in q for q in queries)
+
+    # ========== _insert_*_in_transaction 헬퍼 메서드 ==========
+
+    def test_insert_physicals_in_transaction(self, repo):
+        """physicals INSERT 쿼리 실행 확인"""
+        cursor = MagicMock()
+        record = {"hygiene_care": "완료", "bath_time": "없음", "physical_note": "이상없음"}
+        repo._insert_physicals_in_transaction(cursor, 100, record)
+
+        query = cursor.execute.call_args[0][0]
+        assert "INSERT" in query.upper()
+        assert "daily_physicals" in query
+
+    def test_insert_cognitives_in_transaction(self, repo):
+        """cognitives INSERT 쿼리 실행 확인"""
+        cursor = MagicMock()
+        record = {"cog_support": "완료", "comm_support": "완료", "cognitive_note": ""}
+        repo._insert_cognitives_in_transaction(cursor, 100, record)
+
+        query = cursor.execute.call_args[0][0]
+        assert "INSERT" in query.upper()
+        assert "daily_cognitives" in query
+
+    def test_insert_nursings_in_transaction(self, repo):
+        """nursings INSERT 쿼리 실행 확인"""
+        cursor = MagicMock()
+        record = {"bp_temp": "120/80", "health_manage": "완료", "nursing_note": ""}
+        repo._insert_nursings_in_transaction(cursor, 100, record)
+
+        query = cursor.execute.call_args[0][0]
+        assert "INSERT" in query.upper()
+        assert "daily_nursings" in query
+
+    def test_insert_recoveries_in_transaction(self, repo):
+        """recoveries INSERT 쿼리 실행 확인"""
+        cursor = MagicMock()
+        record = {"prog_basic": "완료", "prog_activity": "완료", "functional_note": ""}
+        repo._insert_recoveries_in_transaction(cursor, 100, record)
+
+        query = cursor.execute.call_args[0][0]
+        assert "INSERT" in query.upper()
+        assert "daily_recoveries" in query
