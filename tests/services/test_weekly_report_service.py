@@ -200,3 +200,113 @@ class TestReportServiceInternalHelpers:
         )
         # 예외 없이 처리됨
         assert isinstance(result, str)
+
+    def test_format_to_float_with_suffix_hoebun(self, service):
+        """'회분' suffix 처리 (_to_float 내부 로직 커버)"""
+        payload = {
+            'previous_week': {}, 'current_week': {},
+            'changes': {'meal': '3회분', 'toilet': '2회'}
+        }
+        result = service._format_input_data(
+            '홍길동',
+            (date(2024, 1, 8), date(2024, 1, 14)),
+            payload
+        )
+        assert isinstance(result, str)
+
+    def test_format_to_float_invalid_string(self, service):
+        """숫자로 변환 불가 문자열 처리 (_to_float ValueError 커버)"""
+        payload = {
+            'previous_week': {}, 'current_week': {},
+            'changes': {'meal': 'abc텍스트', 'toilet': '불명확'}
+        }
+        result = service._format_input_data(
+            '홍길동',
+            (date(2024, 1, 8), date(2024, 1, 14)),
+            payload
+        )
+        assert isinstance(result, str)
+
+    def test_format_with_decrease_trend(self, service):
+        """감소 트렌드 처리 (_trend_label 감소 케이스 커버)"""
+        payload = {
+            'previous_week': {}, 'current_week': {},
+            'changes': {'meal': '-2.0', 'toilet': '-1.0'}
+        }
+        result = service._format_input_data(
+            '홍길동',
+            (date(2024, 1, 8), date(2024, 1, 14)),
+            payload
+        )
+        assert isinstance(result, str)
+
+    def test_format_with_empty_physical_text(self, service):
+        """physical 텍스트가 빈 문자열일 때 처리 (_pick_line 빈 텍스트 케이스)"""
+        payload = {
+            'previous_week': {'physical': '', 'cognitive': ''},
+            'current_week': {'physical': '', 'cognitive': ''},
+            'changes': {'meal': '0.0', 'toilet': '0.0'}
+        }
+        result = service._format_input_data(
+            '홍길동',
+            (date(2024, 1, 8), date(2024, 1, 14)),
+            payload
+        )
+        assert isinstance(result, str)
+
+    def test_format_with_both_notes_empty(self, service):
+        """이전/현재 주 특이사항 모두 빈 텍스트 (_notes_trend 케이스 커버)"""
+        payload = {
+            'previous_week': {'physical': None, 'cognitive': None},
+            'current_week': {'physical': None, 'cognitive': None},
+            'changes': {'meal': '0', 'toilet': '0'}
+        }
+        result = service._format_input_data(
+            '홍길동',
+            (date(2024, 1, 8), date(2024, 1, 14)),
+            payload
+        )
+        assert isinstance(result, str)
+
+    def test_format_with_zero_change_trend(self, service):
+        """식사/배설 변화 모두 0일 때 유지 표현 (_build_physical_change_observation 커버)"""
+        payload = {
+            'previous_week': {'physical': '정상\n유지\n좋음', 'cognitive': '정상'},
+            'current_week': {'physical': '정상\n유지\n좋음', 'cognitive': '정상'},
+            'changes': {'meal': '0.0', 'toilet': '0.0'}
+        }
+        result = service._format_input_data(
+            '홍길동',
+            (date(2024, 1, 8), date(2024, 1, 14)),
+            payload
+        )
+        assert isinstance(result, str)
+
+    def test_format_single_line_physical_text(self, service):
+        """physical 텍스트가 1줄일 때 _pick_line 범위 초과 케이스 커버"""
+        payload = {
+            'previous_week': {'physical': '정상 유지'},  # 1줄 (인덱스 1,2 초과)
+            'current_week': {'physical': '상태 양호'},
+            'changes': {'meal': '1.0', 'toilet': '0.0'}
+        }
+        result = service._format_input_data(
+            '홍길동',
+            (date(2024, 1, 8), date(2024, 1, 14)),
+            payload
+        )
+        assert isinstance(result, str)
+
+    def test_format_same_text_both_weeks(self, service):
+        """이전/현재 텍스트가 동일할 때 _notes_trend '유지' 케이스 커버"""
+        same_text = '특이사항 없음'
+        payload = {
+            'previous_week': {'physical': same_text, 'cognitive': same_text},
+            'current_week': {'physical': same_text, 'cognitive': same_text},
+            'changes': {'meal': '0', 'toilet': '0'}
+        }
+        result = service._format_input_data(
+            '홍길동',
+            (date(2024, 1, 8), date(2024, 1, 14)),
+            payload
+        )
+        assert isinstance(result, str)

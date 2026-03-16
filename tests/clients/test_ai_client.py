@@ -254,3 +254,66 @@ class TestGetApiKey:
             result = get_api_key(provider='gemini')
 
         assert result == 'env-key'
+
+    def test_get_api_key_from_streamlit_secrets(self):
+        """환경변수 없을 때 Streamlit secrets에서 키 조회"""
+        mock_st = MagicMock()
+        mock_st.secrets.get.return_value = 'secrets-gemini-key'
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.dict(sys.modules, {'streamlit': mock_st}):
+                result = get_api_key(provider='gemini')
+
+        assert result == 'secrets-gemini-key'
+
+    def test_get_api_key_streamlit_import_error_falls_through(self):
+        """streamlit ImportError 시 ValueError 발생"""
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.dict(sys.modules, {'streamlit': None}):
+                with pytest.raises((ValueError, ImportError)):
+                    get_api_key(provider='gemini')
+
+
+class TestGetAiClientWithoutStreamlit:
+    """Streamlit 없는 환경에서 get_ai_client 테스트"""
+
+    def setup_method(self):
+        set_ai_client(None)
+
+    def teardown_method(self):
+        set_ai_client(None)
+
+    def test_get_ai_client_creates_gemini_in_plain_env(self):
+        """Streamlit 없는 일반 환경에서 Gemini 클라이언트 생성"""
+        mock_gemini = MagicMock()
+
+        with patch.dict(os.environ, {'GEMINI_API_KEY': 'test-key'}):
+            with patch('modules.clients.ai_client.genai', mock_gemini):
+                with patch('modules.clients.ai_client._get_cached_ai_client',
+                           side_effect=RuntimeError("no streamlit")):
+                    client = get_ai_client(provider='gemini')
+
+        assert isinstance(client, GeminiClient)
+
+    def test_get_ai_client_creates_openai_in_plain_env(self):
+        """Streamlit 없는 일반 환경에서 OpenAI 클라이언트 생성"""
+        mock_openai_module = MagicMock()
+        mock_openai_instance = MagicMock()
+        mock_openai_module.OpenAI.return_value = mock_openai_instance
+
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'test-key'}):
+            with patch('modules.clients.ai_client.openai', mock_openai_module):
+                with patch('modules.clients.ai_client._get_cached_ai_client',
+                           side_effect=RuntimeError("no streamlit")):
+                    client = get_ai_client(provider='openai')
+
+        assert isinstance(client, OpenAIClient)
+
+    def test_get_ai_client_gemini_module_not_installed_raises(self):
+        """genai 모듈이 None일 때 ModuleNotFoundError 발생"""
+        with patch.dict(os.environ, {'GEMINI_API_KEY': 'test-key'}):
+            with patch('modules.clients.ai_client.genai', None):
+                with patch('modules.clients.ai_client._get_cached_ai_client',
+                           side_effect=RuntimeError("no streamlit")):
+                    with pytest.raises(ModuleNotFoundError):
+                        get_ai_client(provider='gemini')

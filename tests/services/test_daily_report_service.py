@@ -377,3 +377,300 @@ class TestEvaluationServiceIntegration:
             result = service._extract_programs_from_text(text)
             for program in expected:
                 assert any(program in r for r in result), f"Expected '{program}' in {result}"
+
+
+class TestEvaluationServiceAdditional:
+    """EvaluationService 추가 커버리지 테스트 (FastAPI 분리 대비)"""
+
+    @pytest.fixture
+    def service(self):
+        with patch('modules.services.daily_report_service.AiEvaluationRepository') as mock_ai_repo, \
+             patch('modules.services.daily_report_service.BaseRepository') as mock_base_repo:
+            mock_ai_repo_instance = MagicMock()
+            mock_base_repo_instance = MagicMock()
+            mock_ai_repo.return_value = mock_ai_repo_instance
+            mock_base_repo.return_value = mock_base_repo_instance
+            svc = EvaluationService()
+            svc._mock_ai_repo = mock_ai_repo_instance
+            svc._mock_base_repo = mock_base_repo_instance
+            yield svc
+
+    # ========== _save_evaluation_result UPDATE 분기 ==========
+
+    def test_save_evaluation_result_update_when_existing(self, service):
+        """기존 레코드가 있을 때 UPDATE 쿼리 실행"""
+        service._mock_base_repo._execute_query_one.return_value = {'ai_eval_id': 42}
+
+        service._save_evaluation_to_db(
+            record_id=1,
+            category='SPECIAL_NOTE_PHYSICAL',
+            oer_fidelity='O',
+            specificity='O',
+            grammar='O',
+            grade='우수',
+            original_text='원본',
+            reason_text='근거',
+            suggestion_text='제안'
+        )
+
+        service._mock_base_repo._execute_transaction.assert_called_once()
+        call_args = service._mock_base_repo._execute_transaction.call_args[0]
+        assert 'UPDATE' in call_args[0]
+
+    def test_save_evaluation_result_insert_when_not_existing(self, service):
+        """기존 레코드가 없을 때 INSERT 쿼리 실행"""
+        service._mock_base_repo._execute_query_one.return_value = None
+
+        service._save_evaluation_to_db(
+            record_id=1,
+            category='SPECIAL_NOTE_PHYSICAL',
+            oer_fidelity='X',
+            specificity='X',
+            grammar='X',
+            grade='개선',
+            original_text='원본',
+            reason_text='',
+            suggestion_text=''
+        )
+
+        service._mock_base_repo._execute_transaction.assert_called_once()
+        call_args = service._mock_base_repo._execute_transaction.call_args[0]
+        assert 'INSERT' in call_args[0]
+
+    # ========== evaluate_special_note_with_ai 코드블록 파싱 ==========
+
+    def test_evaluate_special_note_json_code_block(self, service, sample_ai_response):
+        """```json 코드블록 포함 응답 파싱"""
+        record = {'physical_note': '신체 테스트', 'cognitive_note': '인지 테스트'}
+        wrapped = f'```json\n{sample_ai_response}\n```'
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = wrapped
+        mock_client.chat_completion.return_value = mock_response
+
+        with patch('modules.services.daily_report_service.get_ai_client', return_value=mock_client):
+            with patch('modules.services.daily_report_service.get_special_note_prompt',
+                       return_value=('sys', 'usr')):
+                result = service.evaluate_special_note_with_ai(record)
+
+        assert result is not None
+        assert 'original_physical' in result
+
+    def test_evaluate_special_note_plain_code_block(self, service, sample_ai_response):
+        """``` 코드블록 포함 응답 파싱"""
+        record = {'physical_note': '신체 테스트', 'cognitive_note': '인지 테스트'}
+        wrapped = f'```\n{sample_ai_response}\n```'
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = wrapped
+        mock_client.chat_completion.return_value = mock_response
+
+        with patch('modules.services.daily_report_service.get_ai_client', return_value=mock_client):
+            with patch('modules.services.daily_report_service.get_special_note_prompt',
+                       return_value=('sys', 'usr')):
+                result = service.evaluate_special_note_with_ai(record)
+
+        assert result is not None
+
+    def test_evaluate_special_note_json_parse_error(self, service):
+        """JSON 파싱 실패 시 None 반환"""
+        record = {'physical_note': '신체 테스트', 'cognitive_note': '인지 테스트'}
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = 'invalid json {{{'
+        mock_client.chat_completion.return_value = mock_response
+
+        with patch('modules.services.daily_report_service.get_ai_client', return_value=mock_client):
+            with patch('modules.services.daily_report_service.get_special_note_prompt',
+                       return_value=('sys', 'usr')):
+                result = service.evaluate_special_note_with_ai(record)
+
+        assert result is None
+
+    # ========== save_ai_evaluation evaluation_result=None 분기 ==========
+
+    def test_save_ai_evaluation_none_evaluation_uses_defaults(self, service):
+        """evaluation_result=None 시 기본값으로 저장"""
+        service.save_ai_evaluation(
+            record_id=1,
+            category='SPECIAL_NOTE_PHYSICAL',
+            note_writer_user_id=1,
+            evaluation_result=None,
+            original_text='원본'
+        )
+
+        service._mock_ai_repo.save_evaluation.assert_called_once()
+        call_args = service._mock_ai_repo.save_evaluation.call_args[0]
+        # oer_fidelity, specificity, grammar 모두 'X'
+        assert call_args[2] == 'X'  # oer_fidelity
+        assert call_args[3] == 'X'  # specificity_score
+        assert call_args[4] == 'X'  # grammar_score
+        assert call_args[5] == '평가없음'  # grade_code
+
+    def test_save_ai_evaluation_with_evaluation_result(self, service):
+        """evaluation_result 있을 때 정상 저장"""
+        evaluation_result = {
+            'oer_fidelity': 'O',
+            'specificity': 'O',
+            'grammar': 'O',
+            'grade_code': '우수',
+            'reasoning_process': '근거 내용',
+            'suggestion_text': '제안 내용'
+        }
+
+        service.save_ai_evaluation(
+            record_id=1,
+            category='SPECIAL_NOTE_PHYSICAL',
+            note_writer_user_id=1,
+            evaluation_result=evaluation_result,
+            original_text='원본'
+        )
+
+        service._mock_ai_repo.save_evaluation.assert_called_once()
+
+    # ========== process_daily_note_evaluation 분기 ==========
+
+    def test_process_daily_note_evaluation_record_not_found(self, service):
+        """DB에서 record가 없을 때 평가없음 반환"""
+        service._mock_base_repo._execute_query_one.return_value = None
+
+        result = service.process_daily_note_evaluation(
+            record_id=999,
+            category='PHYSICAL',
+            note_text='신체 테스트',
+            note_writer_user_id=1
+        )
+
+        assert result['grade_code'] == '평가없음'
+        assert result['evaluation'] is None
+
+    def test_process_daily_note_evaluation_ai_success_physical(self, service, sample_ai_response):
+        """PHYSICAL 카테고리 AI 평가 성공"""
+        service._mock_base_repo._execute_query_one.return_value = {
+            'record_id': 1,
+            'customer_name': '홍길동',
+            'physical_note': '신체 테스트',
+            'cognitive_note': '인지 테스트',
+            'nursing_note': '',
+            'functional_note': ''
+        }
+
+        import json
+        ai_data = json.loads(sample_ai_response)
+        ai_result = {
+            'original_physical': {
+                'oer_fidelity': 'O', 'specificity': 'O', 'grammar': 'O',
+                'score': 3, 'grade': '우수'
+            },
+            'original_cognitive': {
+                'oer_fidelity': 'O', 'specificity': 'X', 'grammar': 'O',
+                'score': 2, 'grade': '평균'
+            },
+            'physical': {'corrected_note': '수정된 신체', 'score': 3, 'grade': '우수'},
+            'cognitive': {'corrected_note': '수정된 인지', 'score': 2, 'grade': '평균'}
+        }
+
+        with patch.object(service, 'evaluate_special_note_with_ai', return_value=ai_result):
+            result = service.process_daily_note_evaluation(
+                record_id=1,
+                category='PHYSICAL',
+                note_text='신체 테스트',
+                note_writer_user_id=1
+            )
+
+        assert result['grade_code'] == '우수'
+
+    def test_process_daily_note_evaluation_ai_failure_returns_empty(self, service):
+        """AI 평가 실패 시 평가없음 반환"""
+        service._mock_base_repo._execute_query_one.return_value = {
+            'record_id': 1,
+            'customer_name': '홍길동',
+            'physical_note': '신체 테스트',
+            'cognitive_note': '인지 테스트',
+            'nursing_note': '',
+            'functional_note': ''
+        }
+
+        with patch.object(service, 'evaluate_special_note_with_ai', return_value=None):
+            result = service.process_daily_note_evaluation(
+                record_id=1,
+                category='PHYSICAL',
+                note_text='신체 테스트',
+                note_writer_user_id=1
+            )
+
+        assert result['grade_code'] == '평가없음'
+
+    def test_process_daily_note_evaluation_cognitive_category(self, service):
+        """COGNITIVE 카테고리 AI 평가 - cognitive 결과 추출"""
+        service._mock_base_repo._execute_query_one.return_value = {
+            'record_id': 1,
+            'customer_name': '홍길동',
+            'physical_note': '신체 테스트',
+            'cognitive_note': '인지 테스트',
+            'nursing_note': '',
+            'functional_note': ''
+        }
+
+        ai_result = {
+            'original_physical': {'score': 3, 'grade': '우수'},
+            'original_cognitive': {'score': 2, 'grade': '평균'},
+            'physical': {'corrected_note': '수정된 신체', 'score': 3, 'grade': '우수'},
+            'cognitive': {'corrected_note': '수정된 인지', 'score': 2, 'grade': '평균'}
+        }
+
+        with patch.object(service, 'evaluate_special_note_with_ai', return_value=ai_result):
+            result = service.process_daily_note_evaluation(
+                record_id=1,
+                category='COGNITIVE',
+                note_text='인지 테스트',
+                note_writer_user_id=1
+            )
+
+        assert result['grade_code'] == '평균'
+
+    # ========== _select_most_unique_sentences / _find_least_similar ==========
+
+    def test_select_most_unique_sentences_no_previous(self, service):
+        """이전 문장 없을 때 첫 번째 후보 반환"""
+        ai_result = {
+            'physical_candidates': [
+                {'corrected_note': '신체1'},
+                {'corrected_note': '신체2'},
+                {'corrected_note': '신체3'},
+            ],
+            'cognitive_candidates': [
+                {'corrected_note': '인지1'},
+                {'corrected_note': '인지2'},
+                {'corrected_note': '인지3'},
+            ]
+        }
+
+        result = service._select_most_unique_sentences(ai_result, previous_sentences=[])
+
+        assert result['physical']['corrected_note'] == '신체1'
+        assert result['cognitive']['corrected_note'] == '인지1'
+
+    def test_find_least_similar_no_references(self, service):
+        """참조 문장 없으면 첫 번째 후보 반환"""
+        candidates = ['문장A', '문장B', '문장C']
+        vectorizer = MagicMock()
+
+        result = service._find_least_similar(candidates, [], vectorizer)
+
+        assert result == '문장A'
+
+    def test_find_least_similar_sklearn_fallback(self, service):
+        """scikit-learn 로딩 실패 시 첫 번째 후보 반환"""
+        candidates = ['문장A', '문장B']
+        references = ['참조1']
+
+        with patch('builtins.__import__', side_effect=ImportError("sklearn")):
+            # ImportError 발생 시 fallback
+            result = service._find_least_similar(candidates, references, MagicMock())
+
+        # fallback으로 첫 번째 후보 반환 또는 정상 처리
+        assert result in candidates
